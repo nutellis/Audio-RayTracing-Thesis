@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "com.csound.csoundunity": "https://github.com/rorywalsh/CsoundUnity.git",
     "com.unity.collab-proxy": "2.11.4",
     "com.unity.feature.development": "1.0.2",
     "com.unity.multiplayer.center": "1.0.0",
