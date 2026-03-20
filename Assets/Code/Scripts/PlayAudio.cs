@@ -40,7 +40,7 @@ public class PlayAudio : MonoBehaviour
         // Upload to GPU buffer
         audioBuffer.SetData(audioData);
 
-        // Pass to compute shader, commented out as we are not because it's just to see if we can save the data
+        // Pass to compute shader, commented out as we are using it because it's just to see if we can save the data
         // int kernelHandle = computeShader.FindKernel("CSMain");
         // computeShader.SetBuffer(kernelHandle, "audioBuffer", audioBuffer);
         // computeShader.Dispatch(kernelHandle, (sampleRate + 7) / 8, 1, 1);
