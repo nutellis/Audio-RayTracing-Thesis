@@ -1,0 +1,153 @@
+#pragma kernel InitRays
+#pragma kernel TraceRays
+
+#define PI 3.14159265359
+
+uint seed;
+
+int maxRays;
+
+float deltaTime;
+
+float3 listenerPosition;
+float3 listenerForward;
+float3 listenerRight;
+
+struct Ray
+{
+    // basics for a ray
+    float3 position; // matches the listner position
+    
+    float energy; // volume
+    
+    float3 direction; // matches the listener's forward x right 
+    
+    uint bounceCount; //times reflected
+
+    
+    float distance; // distance traveled to calculate time delay
+    float3 padding;
+};
+RWStructuredBuffer<Ray> rayBuffer;
+
+
+// https://www.reedbeta.com/blog/hash-functions-for-gpu-rendering/
+uint PcgHash(uint input)
+{
+    uint state = input * 747796405u + 2891336453u;
+    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+// https://irrlicht.sourceforge.io/forum/viewtopic.php?t=53246 hash to unit [0,1)
+float Random()
+{
+    seed = PcgHash(seed);
+    return float(seed & 0x00ffffffu) / float(0x01000000u);
+}
+
+float3 SphericalDistribution(uint1 id)
+{
+    seed = id;
+
+    float theta = Random() * 2.0 * PI;
+    float u = Random() * 2.0 - 1.0;
+    
+    float a = sqrt(max(0.0, 1.0 - u * u)); // to avoid negative values if we mess things up
+
+    return float3(
+        a * cos(theta),
+        u,
+        a * sin(theta)
+    );
+
+}
+
+
+[numthreads(64,1,1)]
+void InitRays(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint) maxRays)
+    {
+        return;
+    }
+    
+    Ray ray;
+    
+    ray.position = listenerPosition;
+    ray.direction = SphericalDistribution(id.x);
+    ray.energy = 1.0;
+    ray.distance = 0.0;
+    ray.bounceCount = 0;
+    
+    ray.padding = 0.0;
+    
+    rayBuffer[id.x] = ray;
+}
+
+
+
+bool Interect()
+{
+    return false;
+}
+
+
+
+[numthreads(8,8,1)]
+void TraceRays(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint) maxRays)
+    {
+        return;
+    }
+
+    Ray r = rayBuffer[id.x];
+    
+    if (r.energy <= 0.2) // arbitary number for now. this needs to be relevant to DB loss per hit
+    {
+        return;
+    }
+    
+    //we assume that speed of sound is 343.0 and we deal only with air for now. 
+    // Later on we will have to pass a specific speed for each material we are dealing
+    float speedOfSound = 343.0;
+    
+    // we need to define the step per frame. How "far" does the ray travel per frame?
+    // a valid distance might be the elapsed time since the last frame * speed of sound
+    
+    float stepDistance = speedOfSound * deltaTime;
+    
+    // we get the current position and direction of the ray
+    
+    float3 currentPos = r.position;
+    float3 currentDir = r.direction;
+    
+    // Problems start here! We need to get the scene geometry and intersect with it
+    //Huge TODO!
+    
+    // we then need to evaluate the result of the intesection
+    if (Interect(/*position, direction of ray, scenegeometry buffer*/))
+    {
+        // if we hit something, we need to get it's material and calculate the new energy, reflections, bounce etc
+        
+        //for reflections change the direction!
+        
+        r.bounceCount += 1;
+    }
+    else
+    {
+        //else append the distance to the position
+        
+        r.position += currentDir * stepDistance;
+        
+        r.distance += stepDistance;
+    }
+    
+    rayBuffer[id.x] = r;
+        
+}
+
+
+
+
