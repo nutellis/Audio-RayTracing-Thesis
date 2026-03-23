@@ -408,7 +408,7 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!1 &900477799
+--- !u!1 &822707232
 GameObject:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -416,28 +416,89 @@ GameObject:
   m_PrefabAsset: {fileID: 0}
   serializedVersion: 6
   m_Component:
-  - component: {fileID: 900477801}
-  - component: {fileID: 900477800}
-  - component: {fileID: 900477802}
+  - component: {fileID: 822707235}
+  - component: {fileID: 822707236}
+  - component: {fileID: 822707233}
+  - component: {fileID: 822707234}
   m_Layer: 0
-  m_Name: PlayAudio
+  m_Name: CSound
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
   m_IsActive: 1
---- !u!82 &900477800
+--- !u!114 &822707233
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 822707232}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3d20258c641c94f0ea3dc32cfe3de904, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: com.csound.unity::CsoundUnity
+  logCsoundOutput: 0
+  mute: 0
+  processClipAudio: 0
+  loudVolumeWarning: 1
+  loudWarningThreshold: 10
+  overrideSamplingRate: 0
+  audioRate: 44100
+  controlRate: 44100
+  csoundScore: 
+  environmentSettings: []
+  _csoundFileGUID: acbcbcd2db193f440832422be73e86ef
+  _csoundString: "<CsoundSynthesizer>\r\n<CsOptions>\r\n; no audio out to system
+    \u2014 Unity handles output\r\n</CsOptions>\r\n<CsInstruments>\r\n\r\nsr = 48000\r\nksmps
+    = 32\r\nnchnls = 2\r\n0dbfs = 1\r\n\r\ninstr 1\r\n    ; 0..1 absorption coefficients
+    from Unity.\r\n    kAbsLow chnget \"absLowCoeff\"\r\n    kAbsMid chnget \"absMidCoeff\"\r\n   
+    kAbsHigh chnget \"absHighCoeff\"\r\n\r\n    ; Clamp them to 0..1\r\n    kAbsLow
+    limit kAbsLow, 0, 1\r\n    kAbsMid limit kAbsMid, 0, 1\r\n    kAbsHigh limit
+    kAbsHigh, 0, 1\r\n\r\n    ; Map absorption to attenuation in dB.\r\n    kLowDb
+    = -24 * kAbsLow\r\n    kMidDb = -24 * kAbsMid\r\n    kHighDb = -24 * kAbsHigh\r\n\r\n   
+    ; Test source. Replace with ins input later if needed.\r\n    aSrc oscili 0.3,
+    440\r\n\r\n    ; Split into low, mid, high bands using Butterworth bandpass filters.\r\n   
+    aLow butterbp aSrc, 125, 250 ; from 0 to 250 Hz\r\n    aMid butterbp aSrc, 1000,
+    1500 ; from 250 to 1750 Hz\r\n    aHigh butterbp aSrc, 4000, 4500 ; from 1750
+    Hz to 6250 Hz\r\n\r\n    ; Apply per-band attenuation using parametric EQ.\r\n   
+    ; pareq args: asig, centerFreq, gainDb, Q, mode\r\n    aLowAtt pareq aLow, 125,
+    kLowDb, 1.0, 0\r\n    aMidAtt pareq aMid, 1000, kMidDb, 1.0, 0\r\n    aHighAtt
+    pareq aHigh, 4000, kHighDb, 1.0, 0\r\n\r\n    ; Recombine and output.\r\n   
+    aOut = aLowAtt + aMidAtt + aHighAtt\r\n    outs aOut, aOut\r\nendin\r\n\r\n</CsInstruments>\r\n<CsScore>\r\ni1
+    0 z\r\n</CsScore>\r\n</CsoundSynthesizer>"
+  _csoundFileName: split.csd
+  _csoundAsset: {fileID: 102900000, guid: acbcbcd2db193f440832422be73e86ef, type: 3}
+  _channels: []
+  _availableAudioChannels: []
+  _audioChannelsBufferSize: 32
+  _drawCsoundString: 0
+  _drawTestScore: 0
+  _drawSettings: 0
+  _drawChannels: 0
+  _drawAudioChannels: 0
+  _drawPresets: 0
+  _drawPresetsLoad: 0
+  _drawPresetsSave: 0
+  _drawPresetsImport: 0
+  _showRuntimeEnvironmentPath: 0
+  _currentPreset: 
+  _currentPresetSaveFolder: 
+  _currentPresetLoadFolder: 
+  webGLAssetsList: []
+--- !u!82 &822707234
 AudioSource:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 900477799}
+  m_GameObject: {fileID: 822707232}
   m_Enabled: 1
   serializedVersion: 4
   OutputAudioMixerGroup: {fileID: 0}
   m_audioClip: {fileID: 0}
-  m_Resource: {fileID: 8300000, guid: cbebf2734ca4f8d4cbbbdeee66b0e944, type: 3}
+  m_Resource: {fileID: 0}
   m_PlayOnAwake: 0
   m_Volume: 1
   m_Pitch: 1
@@ -523,44 +584,38 @@ AudioSource:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
---- !u!4 &900477801
+--- !u!4 &822707235
 Transform:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 900477799}
+  m_GameObject: {fileID: 822707232}
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
-  m_LocalPosition: {x: 0, y: 0, z: 32}
+  m_LocalPosition: {x: -20.47871, y: 0, z: 29.02822}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!114 &900477802
+--- !u!114 &822707236
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 900477799}
+  m_GameObject: {fileID: 822707232}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 23fb0ffc3fad67240b8ccb3dde921b0e, type: 3}
+  m_Script: {fileID: 11500000, guid: 20bd25d0b6072b645a1356bf7a73d071, type: 3}
   m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::AudioSource
-  audioSource: {fileID: 900477800}
-  computeShader: {fileID: 7200000, guid: c38f4a608c922a5489ac48a56d3f7762, type: 3}
-  sampleCount: 1024
-  pitchFactor: 1
-  debugReadback: 1
-  debugEveryNFrames: 30
-  maxBlocksPerFrame: 4
-  maxBufferedSamples: 32768
-  kernelName: PitchUp
-  inputBufferName: inputSamples
-  outputBufferName: outputSamples
+  m_EditorClassIdentifier: Assembly-CSharp::CsoundController
+  csound: {fileID: 822707233}
+  absLowCoeff: 0.2
+  absMidCoeff: 0.5
+  absHighCoeff: 0.8
+  updateEveryFrame: 1
 --- !u!1 &1823688464
 GameObject:
   m_ObjectHideFlags: 0
@@ -850,4 +905,4 @@ SceneRoots:
   - {fileID: 157207114}
   - {fileID: 432432461}
   - {fileID: 2013410475}
-  - {fileID: 900477801}
+  - {fileID: 822707235}
