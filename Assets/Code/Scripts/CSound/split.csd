@@ -1,13 +1,13 @@
 <CsoundSynthesizer>
 <CsOptions>
-; no audio out to system — Unity handles output
+; no audio out to system — Unity handles output.
 </CsOptions>
 <CsInstruments>
 
-sr = 48000
-ksmps = 32
-nchnls = 2
-0dbfs = 1
+sr = 48000 ; Sample rate (number of audio samples per second).
+ksmps = 32 ; Number of samples in an audio vector or block of samples.
+nchnls = 2 ; Number of audio channels.
+0dbfs = 1 ; Which number to be set as zero decibel full scale.
 
 instr 1
     ; 0..1 absorption coefficients from Unity.
@@ -15,33 +15,49 @@ instr 1
     kAbsMid chnget "absMidCoeff"
     kAbsHigh chnget "absHighCoeff"
 
-    ; Clamp them to 0..1
-    kAbsLow limit kAbsLow, 0, 1
-    kAbsMid limit kAbsMid, 0, 1
-    kAbsHigh limit kAbsHigh, 0, 1
+    ; Clamp alpha to avoid log10(0) when alpha >= 1.
+    kAbsLow limit kAbsLow, 0, 0.99
+    kAbsMid limit kAbsMid, 0, 0.99
+    kAbsHigh limit kAbsHigh, 0, 0.99
 
-    ; Map absorption to attenuation in dB.
-    kLowDb = -24 * kAbsLow
-    kMidDb = -24 * kAbsMid
-    kHighDb = -24 * kAbsHigh
+    ; Thesis equation: Delta dB = 20 * log10(1 - alpha)
+    kLowDb = 20 * log10(1 - kAbsLow)
+    kMidDb = 20 * log10(1 - kAbsMid)
+    kHighDb = 20 * log10(1 - kAbsHigh)
 
-    ; Test source. Replace with ins input later if needed.
-    aSrc oscili 0.3, 440
+    ; Convert dB to linear amplitude and feed pareq with the linear gain value.
+    kLowAmp ampdb kLowDb
+    kMidAmp ampdb kMidDb
+    kHighAmp ampdb kHighDb
 
-    ; Split into low, mid, high bands using Butterworth bandpass filters.
-    aLow butterbp aSrc, 125, 250 ; from 0 to 250 Hz
-    aMid butterbp aSrc, 1000, 1500 ; from 250 to 1750 Hz
-    aHigh butterbp aSrc, 4000, 4500 ; from 1750 Hz to 6250 Hz
+    ; Unity host stereo input from the AudioSource on the CsoundUnity object.
+    ; Keeps the original stereo image for true stereo processing.
+    aInL, aInR ins
+
+    ; Split left channel into low, mid, high bands using Butterworth bandpass filters.
+    aLowL butterbp aInL, 125, 250
+    aMidL butterbp aInL, 1000, 1500
+    aHighL butterbp aInL, 4000, 4500
+
+    ; Split right channel into low, mid, high bands using Butterworth bandpass filters.
+    aLowR butterbp aInR, 125, 250
+    aMidR butterbp aInR, 1000, 1500
+    aHighR butterbp aInR, 4000, 4500
 
     ; Apply per-band attenuation using parametric EQ.
-    ; pareq args: asig, centerFreq, gainDb, Q, mode
-    aLowAtt pareq aLow, 125, kLowDb, 1.0, 0
-    aMidAtt pareq aMid, 1000, kMidDb, 1.0, 0
-    aHighAtt pareq aHigh, 4000, kHighDb, 1.0, 0
+    ; pareq args: asig, centerFreq, gain, Q, mode
+    aLowAttL pareq aLowL, 125, kLowAmp, 1.0, 0
+    aMidAttL pareq aMidL, 1000, kMidAmp, 1.0, 0
+    aHighAttL pareq aHighL, 4000, kHighAmp, 1.0, 0
 
-    ; Recombine and output.
-    aOut = aLowAtt + aMidAtt + aHighAtt
-    outs aOut, aOut
+    aLowAttR pareq aLowR, 125, kLowAmp, 1.0, 0
+    aMidAttR pareq aMidR, 1000, kMidAmp, 1.0, 0
+    aHighAttR pareq aHighR, 4000, kHighAmp, 1.0, 0
+
+    ; Recombine and output true stereo.
+    aOutL = aLowAttL + aMidAttL + aHighAttL
+    aOutR = aLowAttR + aMidAttR + aHighAttR
+    outs aOutL, aOutR
 endin
 
 </CsInstruments>

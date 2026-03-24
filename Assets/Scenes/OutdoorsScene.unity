@@ -451,22 +451,28 @@ MonoBehaviour:
   environmentSettings: []
   _csoundFileGUID: acbcbcd2db193f440832422be73e86ef
   _csoundString: "<CsoundSynthesizer>\r\n<CsOptions>\r\n; no audio out to system
-    \u2014 Unity handles output\r\n</CsOptions>\r\n<CsInstruments>\r\n\r\nsr = 48000\r\nksmps
-    = 32\r\nnchnls = 2\r\n0dbfs = 1\r\n\r\ninstr 1\r\n    ; 0..1 absorption coefficients
-    from Unity.\r\n    kAbsLow chnget \"absLowCoeff\"\r\n    kAbsMid chnget \"absMidCoeff\"\r\n   
-    kAbsHigh chnget \"absHighCoeff\"\r\n\r\n    ; Clamp them to 0..1\r\n    kAbsLow
-    limit kAbsLow, 0, 1\r\n    kAbsMid limit kAbsMid, 0, 1\r\n    kAbsHigh limit
-    kAbsHigh, 0, 1\r\n\r\n    ; Map absorption to attenuation in dB.\r\n    kLowDb
-    = -24 * kAbsLow\r\n    kMidDb = -24 * kAbsMid\r\n    kHighDb = -24 * kAbsHigh\r\n\r\n   
-    ; Test source. Replace with ins input later if needed.\r\n    aSrc oscili 0.3,
-    440\r\n\r\n    ; Split into low, mid, high bands using Butterworth bandpass filters.\r\n   
-    aLow butterbp aSrc, 125, 250 ; from 0 to 250 Hz\r\n    aMid butterbp aSrc, 1000,
-    1500 ; from 250 to 1750 Hz\r\n    aHigh butterbp aSrc, 4000, 4500 ; from 1750
-    Hz to 6250 Hz\r\n\r\n    ; Apply per-band attenuation using parametric EQ.\r\n   
-    ; pareq args: asig, centerFreq, gainDb, Q, mode\r\n    aLowAtt pareq aLow, 125,
-    kLowDb, 1.0, 0\r\n    aMidAtt pareq aMid, 1000, kMidDb, 1.0, 0\r\n    aHighAtt
-    pareq aHigh, 4000, kHighDb, 1.0, 0\r\n\r\n    ; Recombine and output.\r\n   
-    aOut = aLowAtt + aMidAtt + aHighAtt\r\n    outs aOut, aOut\r\nendin\r\n\r\n</CsInstruments>\r\n<CsScore>\r\ni1
+    \u2014 Unity handles output.\r\n</CsOptions>\r\n<CsInstruments>\r\n\r\nsr = 48000
+    ; Sample rate (number of audio samples per second).\r\nksmps = 32 ; Number of
+    samples in an audio vector or block of samples.\r\nnchnls = 2 ; Number of audio
+    channels.\r\n0dbfs = 1 ; Which number to be set as zero decibel full scale.\r\n\r\ninstr
+    1\r\n    ; 0..1 absorption coefficients from Unity.\r\n    kAbsLow chnget \"absLowCoeff\"\r\n   
+    kAbsMid chnget \"absMidCoeff\"\r\n    kAbsHigh chnget \"absHighCoeff\"\r\n\r\n   
+    ; Clamp alpha to avoid log10(0) when alpha >= 1.\r\n    kAbsLow limit kAbsLow,
+    0, 0.99\r\n    kAbsMid limit kAbsMid, 0, 0.99\r\n    kAbsHigh limit kAbsHigh,
+    0, 0.99\r\n\r\n    ; Thesis equation: Delta dB = 20 * log10(1 - alpha)\r\n   
+    kLowDb = 20 * log10(1 - kAbsLow)\r\n    kMidDb = 20 * log10(1 - kAbsMid)\r\n   
+    kHighDb = 20 * log10(1 - kAbsHigh)\r\n\r\n    ; Convert dB to linear amplitude
+    and feed pareq with the linear gain value.\r\n    kLowAmp ampdb kLowDb\r\n   
+    kMidAmp ampdb kMidDb\r\n    kHighAmp ampdb kHighDb\r\n\r\n    ; Unity host input
+    from the AudioSource on the CsoundUnity object.\r\n    aInL, aInR in\r\n    aSrc
+    = (aInL + aInR) * 0.5\r\n\r\n    ; Split into low, mid, high bands using Butterworth
+    bandpass filters.\r\n    aLow butterbp aSrc, 125, 250 ; from 0 to 250 Hz\r\n   
+    aMid butterbp aSrc, 1000, 1500 ; from 250 to 1750 Hz\r\n    aHigh butterbp aSrc,
+    4000, 4500 ; from 1750 Hz to 6250 Hz\r\n\r\n    ; Apply per-band attenuation
+    using parametric EQ.\r\n    ; pareq args: asig, centerFreq, gain, Q, mode\r\n   
+    aLowAtt pareq aLow, 125, kLowAmp, 1.0, 0\r\n    aMidAtt pareq aMid, 1000, kMidAmp,
+    1.0, 0\r\n    aHighAtt pareq aHigh, 4000, kHighAmp, 1.0, 0\r\n\r\n    ; Recombine
+    and output.\r\n    aOut = aLowAtt + aMidAtt + aHighAtt\r\n    outs aOut, aOut\r\nendin\r\n\r\n</CsInstruments>\r\n<CsScore>\r\ni1
     0 z\r\n</CsScore>\r\n</CsoundSynthesizer>"
   _csoundFileName: split.csd
   _csoundAsset: {fileID: 102900000, guid: acbcbcd2db193f440832422be73e86ef, type: 3}
@@ -476,7 +482,7 @@ MonoBehaviour:
   _drawCsoundString: 0
   _drawTestScore: 0
   _drawSettings: 0
-  _drawChannels: 0
+  _drawChannels: 1
   _drawAudioChannels: 0
   _drawPresets: 0
   _drawPresetsLoad: 0
@@ -498,7 +504,7 @@ AudioSource:
   serializedVersion: 4
   OutputAudioMixerGroup: {fileID: 0}
   m_audioClip: {fileID: 0}
-  m_Resource: {fileID: 0}
+  m_Resource: {fileID: 8300000, guid: 69e908ae9e02ac14c90625c57fdd0371, type: 3}
   m_PlayOnAwake: 0
   m_Volume: 1
   m_Pitch: 1
