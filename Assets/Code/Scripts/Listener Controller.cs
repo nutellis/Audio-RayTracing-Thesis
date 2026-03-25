@@ -7,6 +7,8 @@ public class ListenerController : MonoBehaviour
 
     public ComputeShader audioShader;
     public uint maxRays = 1024;
+    //[SerializeField]
+    private BVHManager BVH;
 
     ComputeBuffer rayBuffer;
     int initKernel;
@@ -17,7 +19,7 @@ public class ListenerController : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        initKernel = audioShader.FindKernel("InitRays");
+     //   initKernel = audioShader.FindKernel("InitRays");
         traceKernel = audioShader.FindKernel("TraceRays");
 
         SetupComputeBuffer();
@@ -30,14 +32,16 @@ public class ListenerController : MonoBehaviour
 
         Ray[] data = new Ray[rayBuffer.count];
 
-
         // debug 
         rayBuffer.GetData(data);
 
-        for (int i = 0; i < 10; i++)
-        {
-            Debug.Log($"Ray {i}: pos={data[i].position}, dir={data[i].direction}, energy={data[i].energy}");
-        }
+        //for (int i = 0; i < 10; i++)
+        //{
+        //    Debug.Log($"Ray {i}: pos={data[i].position}, dir={data[i].direction}, energy={data[i].energy}");
+        //}
+
+        BVH = FindFirstObjectByType<BVHManager>();
+
     }
 
     // Update is called once per frame
@@ -53,9 +57,10 @@ public class ListenerController : MonoBehaviour
 
     private void OnDestroy()
     {
-        rayBuffer.Release();
-
-
+        if(rayBuffer.IsValid())
+        {
+            rayBuffer.Release();
+        }
     }
 
 

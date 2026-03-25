@@ -31,6 +31,21 @@ struct Ray
 RWStructuredBuffer<Ray> rayBuffer;
 
 
+struct BVHNode
+{
+    float4 minBound;
+    float4 maxBound;
+    
+    int primitiveIndex;
+    int leftChild;
+    int rightChild;
+
+    int padding;
+
+};
+RWStructuredBuffer<BVHNode> BVHTree;
+
+
 // https://www.reedbeta.com/blog/hash-functions-for-gpu-rendering/
 uint PcgHash(uint input)
 {

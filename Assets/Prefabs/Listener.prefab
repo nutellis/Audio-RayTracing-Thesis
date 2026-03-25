@@ -13,7 +13,6 @@ GameObject:
   - component: {fileID: 4786286972141981505}
   - component: {fileID: 2640308457785783410}
   - component: {fileID: 142916234651527821}
-  - component: {fileID: 1074402421018839656}
   m_Layer: 0
   m_Name: Listener
   m_TagString: Untagged
@@ -125,23 +124,9 @@ MonoBehaviour:
   m_GameObject: {fileID: 440150976313761185}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: e1712dd20ae0df04d97be37e2d0a3807, type: 3}
+  m_Script: {fileID: 11500000, guid: 48aab003940b729448573cd221d80441, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ListenerController
-  audioShader: {fileID: 7200000, guid: e31fd950a8f1d374eb1d35b04bcbbed5, type: 3}
+  audioShader: {fileID: 7200000, guid: 0a9cf31432f0a374eba02b4e366c453b, type: 3}
   maxRays: 1024
---- !u!114 &1074402421018839656
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 440150976313761185}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: bbaa374dee780f74880000bb1503cf5f, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::DataVisualizer
-  rayMaterial: {fileID: 2100000, guid: d0e07eb4322b54c469569a816d0f4166, type: 2}
-  lineLength: 5
-  controller: {fileID: 142916234651527821}
+  bvh: {fileID: 0}
