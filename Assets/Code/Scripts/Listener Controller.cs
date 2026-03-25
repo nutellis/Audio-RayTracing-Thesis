@@ -8,8 +8,6 @@ public class ListenerController : MonoBehaviour
     public ComputeShader audioShader;
     public uint maxRays = 1024;
 
-
-
     ComputeBuffer rayBuffer;
     int initKernel;
     int traceKernel;
@@ -25,7 +23,6 @@ public class ListenerController : MonoBehaviour
         SetupComputeBuffer();
 
         SetupShader();
-
 
         int groups = Mathf.CeilToInt(maxRays / 64f);
         audioShader.Dispatch(initKernel, groups, 1, 1);
