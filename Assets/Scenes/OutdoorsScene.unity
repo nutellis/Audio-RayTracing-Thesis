@@ -508,7 +508,7 @@ MonoBehaviour:
     a500HzAttL + a1000HzAttL + a2000HzAttL + a4000HzAttL\r\n    aOutR = a125HzAttR
     + a250HzAttR + a500HzAttR + a1000HzAttR + a2000HzAttR + a4000HzAttR\r\n    outs
     aOutL, aOutR\r\nendin\r\n\r\n</CsInstruments>\r\n<CsScore>\r\ni1 0 z\r\n</CsScore>\r\n</CsoundSynthesizer>"
-  _csoundFileName: split.csd
+  _csoundFileName: absorption.csd
   _csoundAsset: {fileID: 102900000, guid: acbcbcd2db193f440832422be73e86ef, type: 3}
   _channels: []
   _availableAudioChannels: []
