@@ -408,6 +408,256 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!1 &822707232
+GameObject:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  serializedVersion: 6
+  m_Component:
+  - component: {fileID: 822707235}
+  - component: {fileID: 822707236}
+  - component: {fileID: 822707233}
+  - component: {fileID: 822707234}
+  m_Layer: 0
+  m_Name: CSound
+  m_TagString: Untagged
+  m_Icon: {fileID: 0}
+  m_NavMeshLayer: 0
+  m_StaticEditorFlags: 0
+  m_IsActive: 1
+--- !u!114 &822707233
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 822707232}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3d20258c641c94f0ea3dc32cfe3de904, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: com.csound.unity::CsoundUnity
+  logCsoundOutput: 0
+  mute: 0
+  processClipAudio: 0
+  loudVolumeWarning: 1
+  loudWarningThreshold: 10
+  overrideSamplingRate: 0
+  audioRate: 44100
+  controlRate: 44100
+  csoundScore: 
+  environmentSettings: []
+  _csoundFileGUID: acbcbcd2db193f440832422be73e86ef
+  _csoundString: "<CsoundSynthesizer>\r\n<CsOptions>\r\n; no audio out to system
+    \u2014 Unity handles output.\r\n</CsOptions>\r\n<CsInstruments>\r\n\r\nsr = 48000
+    ; Sample rate (number of audio samples per second).\r\nksmps = 32 ; Number of
+    samples in an audio vector or block of samples.\r\nnchnls = 2 ; Number of audio
+    channels.\r\n0dbfs = 1 ; Which number to be set as zero decibel full scale.\r\n\r\ninstr
+    1\r\n    ; 0..1 absorption coefficients from Unity.\r\n    kAbs125Hz chnget \"abs125HzCoeff\"\r\n   
+    kAbs250Hz chnget \"abs250HzCoeff\"\r\n    kAbs500Hz chnget \"abs500HzCoeff\"\r\n   
+    kAbs1000Hz chnget \"abs1000HzCoeff\"\r\n    kAbs2000Hz chnget \"abs2000HzCoeff\"\r\n   
+    kAbs4000Hz chnget \"abs4000HzCoeff\"\r\n\r\n    kCenterFreq125Hz chnget \"kCenterFreq125Hz\"\r\n   
+    kCenterFreq250Hz chnget \"kCenterFreq250Hz\"\r\n    kCenterFreq500Hz chnget \"kCenterFreq500Hz\"\r\n   
+    kCenterFreq1000Hz chnget \"kCenterFreq1000Hz\"\r\n    kCenterFreq2000Hz chnget
+    \"kCenterFreq2000Hz\"\r\n    kCenterFreq4000Hz chnget \"kCenterFreq4000Hz\"\r\n\r\n   
+    kBand125Hz chnget \"kBand125Hz\"\r\n    kBand250Hz chnget \"kBand250Hz\"\r\n   
+    kBand500Hz chnget \"kBand500Hz\"\r\n    kBand1000Hz chnget \"kBand1000Hz\"\r\n   
+    kBand2000Hz chnget \"kBand2000Hz\"\r\n    kBand4000Hz chnget \"kBand4000Hz\"\r\n\r\n   
+    ; Clamp alpha values to 0..1 to avoid invalid log10() calculations and negative
+    gain.\r\n    kAbs125Hz limit kAbs125Hz, 0, 1\r\n    kAbs250Hz limit kAbs250Hz,
+    0, 1\r\n    kAbs500Hz limit kAbs500Hz, 0, 1\r\n    kAbs1000Hz limit kAbs1000Hz,
+    0, 1\r\n    kAbs2000Hz limit kAbs2000Hz, 0, 1\r\n    kAbs4000Hz limit kAbs4000Hz,
+    0, 1\r\n\r\n    ; Paper equation: Delta dB = 20 * log10(1 - alpha)\r\n    k125HzDb
+    = 20 * log10(1 - kAbs125Hz)\r\n    k250HzDb = 20 * log10(1 - kAbs250Hz)\r\n   
+    k500HzDb = 20 * log10(1 - kAbs500Hz)\r\n    k1000HzDb = 20 * log10(1 - kAbs1000Hz)\r\n   
+    k2000HzDb = 20 * log10(1 - kAbs2000Hz)\r\n    k4000HzDb = 20 * log10(1 - kAbs4000Hz)\r\n\r\n   
+    ; Convert dB to linear amplitude and feed pareq with the linear gain value.\r\n   
+    k125HzAmp ampdb k125HzDb\r\n    k250HzAmp ampdb k250HzDb\r\n    k500HzAmp ampdb
+    k500HzDb\r\n    k1000HzAmp ampdb k1000HzDb\r\n    k2000HzAmp ampdb k2000HzDb\r\n   
+    k4000HzAmp ampdb k4000HzDb\r\n\r\n    ; Unity host stereo input from the AudioSource
+    on the CsoundUnity object.\r\n    ; Keeps the original stereo image for true
+    stereo processing.\r\n    aInL, aInR ins\r\n\r\n    ; Test input: sum six sine
+    tones to verify each frequency band attenuation.\r\n    ; Keep per-tone amplitude
+    low so the summed signal stays below full scale.\r\n    ; a125Test oscili 0.8,
+    125\r\n    ; a250Test oscili 0.8, 250\r\n    ; a500Test oscili 0.8, 500\r\n   
+    ; a1000Test oscili 0.8, 1000\r\n    ; a2000Test oscili 0.8, 2000\r\n    ; a4000Test
+    oscili 0.8, 4000\r\n    ; aTestMix = a125Test + a250Test + a500Test + a1000Test
+    + a2000Test + a4000Test\r\n    ; aInL = aTestMix\r\n    ; aInR = aTestMix\r\n\r\n\r\n   
+    ; Split left channel into 125Hz, 250Hz, 500Hz, 1000Hz, 2000Hz, and 4000Hz bands
+    using Butterworth bandpass filters.\r\n    a125HzL butterbp aInL, kCenterFreq125Hz,
+    kBand125Hz\r\n    a250HzL butterbp aInL, kCenterFreq250Hz, kBand250Hz\r\n   
+    a500HzL butterbp aInL, kCenterFreq500Hz, kBand500Hz\r\n    a1000HzL butterbp
+    aInL, kCenterFreq1000Hz, kBand1000Hz\r\n    a2000HzL butterbp aInL, kCenterFreq2000Hz,
+    kBand2000Hz\r\n    a4000HzL butterbp aInL, kCenterFreq4000Hz, kBand4000Hz\r\n\r\n   
+    ; Split right channel into 125Hz, 250Hz, 500Hz, 1000Hz, 2000Hz, and 4000Hz bands
+    using Butterworth bandpass filters.\r\n    a125HzR butterbp aInR, kCenterFreq125Hz,
+    kBand125Hz\r\n    a250HzR butterbp aInR, kCenterFreq250Hz, kBand250Hz\r\n   
+    a500HzR butterbp aInR, kCenterFreq500Hz, kBand500Hz\r\n    a1000HzR butterbp
+    aInR, kCenterFreq1000Hz, kBand1000Hz\r\n    a2000HzR butterbp aInR, kCenterFreq2000Hz,
+    kBand2000Hz\r\n    a4000HzR butterbp aInR, kCenterFreq4000Hz, kBand4000Hz\r\n\r\n   
+    ; Apply per-band attenuation by directly scaling each band with linear gain.\r\n   
+    a125HzAttL = a125HzL * k125HzAmp\r\n    a250HzAttL = a250HzL * k250HzAmp\r\n   
+    a500HzAttL = a500HzL * k500HzAmp\r\n    a1000HzAttL = a1000HzL * k1000HzAmp\r\n   
+    a2000HzAttL = a2000HzL * k2000HzAmp\r\n    a4000HzAttL = a4000HzL * k4000HzAmp\r\n\r\n   
+    a125HzAttR = a125HzR * k125HzAmp\r\n    a250HzAttR = a250HzR * k250HzAmp\r\n   
+    a500HzAttR = a500HzR * k500HzAmp\r\n    a1000HzAttR = a1000HzR * k1000HzAmp\r\n   
+    a2000HzAttR = a2000HzR * k2000HzAmp\r\n    a4000HzAttR = a4000HzR * k4000HzAmp\r\n\r\n   
+    ; Recombine and output true stereo.\r\n    aOutL = a125HzAttL + a250HzAttL +
+    a500HzAttL + a1000HzAttL + a2000HzAttL + a4000HzAttL\r\n    aOutR = a125HzAttR
+    + a250HzAttR + a500HzAttR + a1000HzAttR + a2000HzAttR + a4000HzAttR\r\n    outs
+    aOutL, aOutR\r\nendin\r\n\r\n</CsInstruments>\r\n<CsScore>\r\ni1 0 z\r\n</CsScore>\r\n</CsoundSynthesizer>"
+  _csoundFileName: absorption.csd
+  _csoundAsset: {fileID: 102900000, guid: acbcbcd2db193f440832422be73e86ef, type: 3}
+  _channels: []
+  _availableAudioChannels: []
+  _audioChannelsBufferSize: 32
+  _drawCsoundString: 0
+  _drawTestScore: 0
+  _drawSettings: 0
+  _drawChannels: 1
+  _drawAudioChannels: 0
+  _drawPresets: 0
+  _drawPresetsLoad: 0
+  _drawPresetsSave: 0
+  _drawPresetsImport: 0
+  _showRuntimeEnvironmentPath: 0
+  _currentPreset: 
+  _currentPresetSaveFolder: 
+  _currentPresetLoadFolder: 
+  webGLAssetsList: []
+--- !u!82 &822707234
+AudioSource:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 822707232}
+  m_Enabled: 1
+  serializedVersion: 4
+  OutputAudioMixerGroup: {fileID: 0}
+  m_audioClip: {fileID: 0}
+  m_Resource: {fileID: 8300000, guid: 3a4043105f20f524499dc8c12275a054, type: 3}
+  m_PlayOnAwake: 0
+  m_Volume: 1
+  m_Pitch: 1
+  Loop: 0
+  Mute: 0
+  Spatialize: 0
+  SpatializePostEffects: 0
+  Priority: 128
+  DopplerLevel: 1
+  MinDistance: 1
+  MaxDistance: 500
+  Pan2D: 0
+  rolloffMode: 0
+  BypassEffects: 0
+  BypassListenerEffects: 0
+  BypassReverbZones: 0
+  rolloffCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    - serializedVersion: 3
+      time: 1
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  panLevelCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  spreadCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 0
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+  reverbZoneMixCustomCurve:
+    serializedVersion: 2
+    m_Curve:
+    - serializedVersion: 3
+      time: 0
+      value: 1
+      inSlope: 0
+      outSlope: 0
+      tangentMode: 0
+      weightedMode: 0
+      inWeight: 0.33333334
+      outWeight: 0.33333334
+    m_PreInfinity: 2
+    m_PostInfinity: 2
+    m_RotationOrder: 4
+--- !u!4 &822707235
+Transform:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 822707232}
+  serializedVersion: 2
+  m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
+  m_LocalPosition: {x: -20.47871, y: 0, z: 29.02822}
+  m_LocalScale: {x: 1, y: 1, z: 1}
+  m_ConstrainProportionsScale: 0
+  m_Children: []
+  m_Father: {fileID: 0}
+  m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
+--- !u!114 &822707236
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 822707232}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 20bd25d0b6072b645a1356bf7a73d071, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CsoundController
+  csound: {fileID: 822707233}
+  abs125HzCoeff: 0
+  abs250HzCoeff: 0
+  abs500HzCoeff: 0
+  abs1000HzCoeff: 0
+  abs2000HzCoeff: 0
+  abs4000HzCoeff: 0
 --- !u!1 &1823688464
 GameObject:
   m_ObjectHideFlags: 0
@@ -697,3 +947,4 @@ SceneRoots:
   - {fileID: 157207114}
   - {fileID: 432432461}
   - {fileID: 2013410475}
+  - {fileID: 822707235}
