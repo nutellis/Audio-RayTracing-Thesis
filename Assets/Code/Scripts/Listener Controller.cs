@@ -6,6 +6,8 @@ public class ListenerController : MonoBehaviour
 {
 
     public ComputeShader audioShader;
+
+
     public uint maxRays = 1024;
     //[SerializeField]
     private BVHManager BVH;
@@ -13,6 +15,7 @@ public class ListenerController : MonoBehaviour
     ComputeBuffer rayBuffer;
     int initKernel;
     int traceKernel;
+
 
 
 
@@ -57,10 +60,8 @@ public class ListenerController : MonoBehaviour
 
     private void OnDestroy()
     {
-        if(rayBuffer.IsValid())
-        {
-            rayBuffer.Release();
-        }
+        rayBuffer?.Release();
+
     }
 
 
@@ -77,7 +78,7 @@ public class ListenerController : MonoBehaviour
     {
 
         int stride = Marshal.SizeOf(typeof(Ray));
-        Debug.Log("Stride: " + stride);
+       // Debug.Log("Stride: " + stride);
         rayBuffer = new ComputeBuffer(((int)maxRays), stride);
 
         audioShader.SetBuffer(initKernel, "rayBuffer", rayBuffer);

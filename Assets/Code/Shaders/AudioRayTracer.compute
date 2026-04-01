@@ -1,6 +1,7 @@
 #pragma kernel InitRays
 #pragma kernel TraceRays
 
+
 #define PI 3.14159265359
 
 uint seed;
@@ -44,6 +45,9 @@ struct BVHNode
 
 };
 RWStructuredBuffer<BVHNode> BVHTree;
+
+
+
 
 
 // https://www.reedbeta.com/blog/hash-functions-for-gpu-rendering/
@@ -100,7 +104,20 @@ void InitRays(uint3 id : SV_DispatchThreadID)
     rayBuffer[id.x] = ray;
 }
 
-
+// Standard Ray-AABB intersection (The Slab Method)
+float RayAABB(float3 rayOrigin, float3 invDir, float3 aabbMin, float3 aabbMax, float tMin, float tMax)
+{
+    float3 t0 = (aabbMin - rayOrigin) * invDir;
+    float3 t1 = (aabbMax - rayOrigin) * invDir;
+    
+    float3 tNear = min(t0, t1);
+    float3 tFar = max(t0, t1);
+    
+    float near = max(max(tNear.x, tNear.y), max(tNear.z, tMin));
+    float far = min(min(tFar.x, tFar.y), min(tFar.z, tMax));
+    
+    return (near <= far) ? near : 1e30; // Return distance or "Infinity"
+}
 
 bool Interect()
 {

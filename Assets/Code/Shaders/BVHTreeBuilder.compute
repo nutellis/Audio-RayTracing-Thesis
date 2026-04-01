@@ -1,0 +1,404 @@
+#pragma kernel GenerateMortonCodes
+
+#pragma kernel LocalHistogramPass
+#pragma kernel GlobalScanPass
+#pragma kernel ScatterPass
+
+#pragma kernel BuildHierarchy
+#pragma kernel FitAABBs
+
+
+// Morton Code Generation
+cbuffer MortonCodeGenerationParams
+{
+    uint objectCount;
+    float3 sceneMin;
+    float3 sceneMax;
+}
+
+StructuredBuffer<float3> centroidsBuffer;
+RWStructuredBuffer<int> primitiveIndicesBuffer;
+
+RWStructuredBuffer<uint> mortonCodesBuffer;
+
+
+// https://developer.nvidia.com/blog/thinking-parallel-part-iii-tree-construction-gpu/
+// Expands a 10-bit integer into 30 bits
+// by inserting 2 zeros after each bit.
+unsigned int ExpandBits(unsigned int v)
+{
+    v = (v * 0x00010001u) & 0xFF0000FFu;
+    v = (v * 0x00000101u) & 0x0F00F00Fu;
+    v = (v * 0x00000011u) & 0xC30C30C3u;
+    v = (v * 0x00000005u) & 0x49249249u;
+    return v;
+}
+
+// Calculates a 30-bit Morton code for the
+// given 3D point located within the unit cube [0,1].
+unsigned int Morton3D(float x, float y, float z)
+{
+    x = clamp(x * 1024.0f, 0.0f, 1023.0f);
+    y = clamp(y * 1024.0f, 0.0f, 1023.0f);
+    z = clamp(z * 1024.0f, 0.0f, 1023.0f);
+    uint xx = ExpandBits((uint) x);
+    uint yy = ExpandBits((uint) y);
+    uint zz = ExpandBits((uint) z);
+    return xx * 4 + yy * 2 + zz;
+}
+
+[numthreads(64, 1, 1)]
+void GenerateMortonCodes(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+
+    if (i >= objectCount)
+        return;
+
+    float3 c = centroidsBuffer[i];
+
+    // normalize to [0,1]
+    float3 normalized = (c - sceneMin) / (sceneMax - sceneMin);
+
+    uint code = Morton3D(normalized.x, normalized.y, normalized.z);
+
+    mortonCodesBuffer[i] = code;
+    primitiveIndicesBuffer[i] = i;
+}
+
+
+// =============================================================================
+// HIGH PERFORMANCE GPU RADIX SORT (4-BIT STABLE)
+// =============================================================================
+
+#define THREADS_PER_BLOCK 64
+
+// Intermediate Buffers
+RWStructuredBuffer<uint> blockHistograms : register(u0); // Size: [NumBlocks * 16]
+RWStructuredBuffer<uint> globalOffsets : register(u1); // Size: [NumBlocks * 16]
+
+// Output Buffers (Ping-pong these in C#)
+RWStructuredBuffer<uint> outputMorton : register(u2);
+RWStructuredBuffer<uint> outputObjectIDs : register(u3);
+
+uint shift;
+
+
+
+groupshared uint s_localHist[16];
+
+[numthreads(THREADS_PER_BLOCK, 1, 1)]
+void LocalHistogramPass(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint localID : SV_GroupIndex)
+{
+    // Initialize shared memory
+    if (localID < 16)
+        s_localHist[localID] = 0;
+    GroupMemoryBarrierWithGroupSync();
+
+    // All available threads < objectCount should run this
+    if (id.x < objectCount)
+    {
+        uint digit = (mortonCodesBuffer[id.x] >> shift) & 0xF;
+        InterlockedAdd(s_localHist[digit], 1);
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // Again here only 16 threads [0-15] per group should run this
+    if (localID < 16)
+    {
+        uint writeIdx = (groupID.x * 16) + localID; // 2D mapping into a 1D [group][16]
+        blockHistograms[writeIdx] = s_localHist[localID];
+    }
+}
+
+
+groupshared uint s_digitTotals[16];
+
+[numthreads(16, 1, 1)]
+void GlobalScanPass(uint3 id : SV_DispatchThreadID)
+{
+    uint i = id.x;
+    
+    // because this is not a huge amount of work it is done in 16 threads exactly. 
+    // One thread per digit in a bucket. That is why we need to calculate the groups inside the shader and not pass it on the Dispatch
+    uint groups = (objectCount + (THREADS_PER_BLOCK - 1)) / THREADS_PER_BLOCK; // == ceil(objectCount / (float) THREADS_PER_BLOCK)
+
+    // 1. Calculate sum of this digit across all blocks
+    uint totalCountForDigit = 0;
+    for (uint b = 0; b < groups; b++)
+    {
+        totalCountForDigit += blockHistograms[b * 16 + i];
+    }
+    s_digitTotals[i] = totalCountForDigit;
+    GroupMemoryBarrierWithGroupSync();
+
+    // we run this on one thread serial. Not much work to parallelize this.
+    if (i == 0)
+    {
+        uint runningSum = 0;
+        for (uint i = 0; i < 16; i++)
+        {
+            uint count = s_digitTotals[i];
+            s_digitTotals[i] = runningSum;
+            runningSum += count;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // now on each of the 16 threads we dispatched we calculate the sum prefix globally
+    // This is still a per group array meaning that it will be twice the size (32)
+    uint currentOffset = s_digitTotals[i];
+    for (uint blockIdx = 0; blockIdx < groups; blockIdx++)
+    {
+        uint histogramIdx = blockIdx * 16 + i;
+        globalOffsets[histogramIdx] = currentOffset;
+        currentOffset += blockHistograms[histogramIdx];
+    }
+}
+
+// -----------------------------------------------------------------------------
+// STEP 3: STABLE SCATTER (DOWNSWEEP)
+// -----------------------------------------------------------------------------
+groupshared uint s_digits[THREADS_PER_BLOCK];
+groupshared uint s_blockDigitOffsets[16];
+
+[numthreads(THREADS_PER_BLOCK, 1, 1)]
+void ScatterPass(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uint localID : SV_GroupIndex)
+{
+    uint code = 0xFFFFFFFF;
+    uint obj = 0;
+    uint digit = 0;
+    bool active = id.x < objectCount;
+
+    // Load data and share digits for local ranking
+    if (active)
+    {
+        code = mortonCodesBuffer[id.x];
+        obj = primitiveIndicesBuffer[id.x];
+        digit = (code >> shift) & 0xF;
+    }
+    s_digits[localID] = digit;
+
+    // Load global base offsets for this block. This is done by the first 16 threads in the block,
+    // to bring global memory into local memory (L1 cache) for faster access during the scatter.
+    if (localID < 16)
+    {
+        s_blockDigitOffsets[localID] = globalOffsets[groupID.x * 16 + localID];
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // Calculate Local Rank: count identical digits appearing BEFORE me in this block. 
+    // If my digit is 3, count how many 3s appear before me in this block. This gives me my local rank for this digit in this block.
+    uint localRank = 0;
+    if (active)
+    {
+        for (uint i = 0; i < localID; i++)
+        {
+            if (s_digits[i] == digit)
+                localRank++;
+        }
+
+        // Final address = Base offset for this block/digit + my rank in this block
+        uint finalIndex = s_blockDigitOffsets[digit] + localRank;
+
+        outputMorton[finalIndex] = code;
+        outputObjectIDs[finalIndex] = obj;
+    }
+}
+
+struct BVHNode
+{
+    //leaf data
+    float3 aabbMin;
+    float3 aabbMax;
+    int primitiveIndex;
+
+    //internal data
+    int leftChild;
+    int rightChild;
+    
+    int parent; // for padding and might be useful
+
+};
+//struct LeafNode
+//{
+//    float3 aabbMin;
+//    float3 aabbMax;
+//    int primitiveIndex;
+//};
+
+//struct InternalNode
+//{
+//    int leftChild;
+//    int rightChild;
+//};
+
+//RWStructuredBuffer<LeafNode> leafNodes; 
+//RWStructuredBuffer<InternalNode> internalNodes;
+RWStructuredBuffer<BVHNode> bvhNodes; // Size: 2N - 1
+
+StructuredBuffer<uint> sortedMortonCodes;
+StructuredBuffer<uint> sortedIndices;
+
+// count leading zeros of the XOR of two codes
+int Delta(int i, int j, int n)
+{
+    // 1. Bounds check
+    if (j < 0 || j >= n)
+        return -1;
+
+    uint codeI = sortedMortonCodes[i];
+    uint codeJ = sortedMortonCodes[j];
+
+    // 2. Handle identical Morton codes (Tie-breaker)
+    if (codeI == codeJ)
+    {
+        // Use the index to differentiate. 
+        // 'firstbithigh'returns the position of the first non zero bit in a 32-bit number starting from the left to the right
+        return 30 + (31 - firstbithigh(i ^ j));
+    }
+
+    // Common Prefix Length
+    // 29 - that number gives us how many zeroes are common.
+    // we do the XOR of the two codes cause same bits return 0 and different ones return 1.
+    return 29 - firstbithigh(codeI ^ codeJ);
+}
+
+RWStructuredBuffer<int4> deltas;
+
+
+[numthreads(64, 1, 1)]
+void BuildHierarchy(uint3 id : SV_DispatchThreadID)
+{
+    int i = id.x;
+    if (i >= (int) objectCount - 1)
+        return; // N-1 internal nodes
+
+    // Determine direction of the range (+1 or -1)
+    int d = sign(Delta(i, i + 1, objectCount) - Delta(i, i - 1, objectCount));
+
+    // Compute upper bound for the length of the range
+    int deltaMin = Delta(i, i - d, objectCount);
+    uint lMax = 2;
+    while (Delta(i, i + d * lMax, objectCount) > deltaMin)
+    {
+        lMax *= 2;
+    }
+
+    // Find the other end using binary search
+    int l = 0;
+    for (uint t = lMax / 2; t >= 1; t /= 2)
+    {
+        if (Delta(i, i + d * (l + t), objectCount) > deltaMin)
+        {
+            l += t;
+        }
+    }
+    int j = i + d * l;
+
+    // Find the split position using binary search
+    int deltaNode = Delta(i, j, objectCount);
+    
+    //this is vibe coded. I had an issue with weird values because the previous code assumed l is a power of two. 
+    // Turns out it is not and copilot suggested that the problem should be fixed by finding the highest power of two smaller than l and then doing a binary search from there.
+    //it actually worked
+    
+    // find highest power of two <= l
+    uint t1 = 1;
+    while (t1 <= l)
+        t1 <<= 1;
+    t1 >>= 1;
+    
+    int s = 0;
+    for (; t1 >= 1; t1 >>= 1)
+    {
+        if (Delta(i, i + d * (s + t1), objectCount) > deltaNode)
+        {
+            s += t1;
+        }
+    }
+    // vibe code out
+    
+    int gamma = i + d * s + min(d, 0);
+
+    int leftChild, rightChild;
+    
+    // Output child pointers
+    if (min(i, j) == gamma) // this is a leaf node
+    {
+        leftChild = (objectCount - 1 + gamma); // cause leaf nodes are stored after internal nodes. bvh tree is 2N-1 meaning that N-1 are internal and the rest N are the actual leaf nodes
+        bvhNodes[leftChild].primitiveIndex = sortedIndices[gamma];
+    }
+    else // internal node
+    {
+        leftChild = gamma;
+    }
+    
+    if (max(i, j) == gamma + 1) // this is also a leaf node
+    {
+        rightChild = (objectCount - 1 + (gamma + 1));
+        bvhNodes[rightChild].primitiveIndex = sortedIndices[gamma + 1];
+
+    }
+    else
+    {
+        rightChild = gamma + 1;
+    }
+   
+    bvhNodes[i].leftChild = leftChild;
+    bvhNodes[i].rightChild = rightChild;
+    
+    bvhNodes[leftChild].parent = i;
+    bvhNodes[rightChild].parent = i;
+    
+    // Internal node has no primitive
+    bvhNodes[i].primitiveIndex = -1;
+    
+    
+    deltas[i] = int4(d, j, l, gamma);
+}
+
+
+StructuredBuffer<float3> leafBoundsBuffer;
+RWStructuredBuffer<int> atomicFlags; // Size: objectCount - 1 (Internal nodes)
+
+[numthreads(64, 1, 1)]
+void FitAABBs(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= (uint) objectCount)
+        return;
+
+    int leafIdx = (objectCount - 1) + id.x;
+    
+    int primitiveIdx = bvhNodes[leafIdx].primitiveIndex;
+    
+    // leafBoundsBuffer is organized as [Min0, Max0, Min1, Max1...]
+    bvhNodes[leafIdx].aabbMin = leafBoundsBuffer[primitiveIdx * 2];
+    bvhNodes[leafIdx].aabbMax = leafBoundsBuffer[primitiveIdx * 2 + 1];
+
+    int current = leafIdx;
+    int parent = bvhNodes[current].parent;
+
+    while (parent != -1)
+    {
+        int visitedCount;
+
+        InterlockedAdd(atomicFlags[parent], 1, visitedCount);
+
+        // if I am the first child to arrive (visitedCount == 0), I stop.
+        // the second child to arrive will find visitedCount == 1 and proceed to compute its parents AABB.
+        if (visitedCount == 0)
+            return;
+
+        // I am the second child. Compute parent AABB.
+        int l = bvhNodes[parent].leftChild;
+        int r = bvhNodes[parent].rightChild;
+
+        bvhNodes[parent].aabbMin = min(bvhNodes[l].aabbMin, bvhNodes[r].aabbMin);
+        bvhNodes[parent].aabbMax = max(bvhNodes[l].aabbMax, bvhNodes[r].aabbMax);
+
+        // Continue to the next level
+        current = parent;
+        parent = bvhNodes[current].parent;
+    }
+}
