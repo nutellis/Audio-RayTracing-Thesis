@@ -217,24 +217,9 @@ struct BVHNode
     int leftChild;
     int rightChild;
     
-    int parent; // for padding and might be useful
+    int parent;
 
 };
-//struct LeafNode
-//{
-//    float3 aabbMin;
-//    float3 aabbMax;
-//    int primitiveIndex;
-//};
-
-//struct InternalNode
-//{
-//    int leftChild;
-//    int rightChild;
-//};
-
-//RWStructuredBuffer<LeafNode> leafNodes; 
-//RWStructuredBuffer<InternalNode> internalNodes;
 RWStructuredBuffer<BVHNode> bvhNodes; // Size: 2N - 1
 
 StructuredBuffer<uint> sortedMortonCodes;
@@ -250,7 +235,7 @@ int Delta(int i, int j, int n)
     uint codeI = sortedMortonCodes[i];
     uint codeJ = sortedMortonCodes[j];
 
-    // 2. Handle identical Morton codes (Tie-breaker)
+    // 2. Handle identical Morton codes (tie-breaker)
     if (codeI == codeJ)
     {
         // Use the index to differentiate. 
@@ -258,14 +243,16 @@ int Delta(int i, int j, int n)
         return 30 + (31 - firstbithigh(i ^ j));
     }
 
-    // Common Prefix Length
+    // Common Prefix Length 
     // 29 - that number gives us how many zeroes are common.
     // we do the XOR of the two codes cause same bits return 0 and different ones return 1.
     return 29 - firstbithigh(codeI ^ codeJ);
 }
 
-RWStructuredBuffer<int4> deltas;
 
+
+// debug data
+RWStructuredBuffer<int4> deltas;
 
 [numthreads(64, 1, 1)]
 void BuildHierarchy(uint3 id : SV_DispatchThreadID)
@@ -304,7 +291,7 @@ void BuildHierarchy(uint3 id : SV_DispatchThreadID)
     //it actually worked
     
     // find highest power of two <= l
-    uint t1 = 1;
+    int t1 = 1;
     while (t1 <= l)
         t1 <<= 1;
     t1 >>= 1;
