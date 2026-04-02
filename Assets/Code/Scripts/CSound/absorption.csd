@@ -48,7 +48,7 @@ instr 1
     k2000HzDb = 20 * log10(1 - kAbs2000Hz)
     k4000HzDb = 20 * log10(1 - kAbs4000Hz)
 
-    ; Convert dB to linear amplitude and feed pareq with the linear gain value.
+    ; Convert dB to linear amplitude gain for direct scaling of each band.
     k125HzAmp ampdb k125HzDb
     k250HzAmp ampdb k250HzDb
     k500HzAmp ampdb k500HzDb
