@@ -32,19 +32,6 @@ public class ListenerController : MonoBehaviour
         int groups = Mathf.CeilToInt(maxRays / 64f);
         audioShader.Dispatch(initKernel, groups, 1, 1);
 
-
-        Ray[] data = new Ray[rayBuffer.count];
-
-        // debug 
-        rayBuffer.GetData(data);
-
-        //for (int i = 0; i < 10; i++)
-        //{
-        //    Debug.Log($"Ray {i}: pos={data[i].position}, dir={data[i].direction}, energy={data[i].energy}");
-        //}
-
-        BVH = FindFirstObjectByType<BVHManager>();
-
     }
 
     // Update is called once per frame
@@ -93,4 +80,29 @@ public class ListenerController : MonoBehaviour
         UpdateShaderData();
     }
 
+#if UNITY_EDITOR
+    private void OnDrawGizmos()
+    {
+        if(rayBuffer != null)
+        {
+
+            Ray[] data = new Ray[rayBuffer.count];
+
+            rayBuffer.GetData(data);
+
+            if (data == null) return;
+
+            for (int i = 0; i < data.Length; i++)
+            {
+                var ray = data[i];
+                Gizmos.color = Color.red;// ray.hit ? Color.red : Color.green;
+
+                 Gizmos.DrawLine(ray.position, ray.position + (ray.direction * 10));
+
+                // Draw a small tip to show directionality
+                Gizmos.DrawSphere(ray.position + (ray.direction * 10), 0.05f);
+            }
+        }
+    }
+#endif
 }

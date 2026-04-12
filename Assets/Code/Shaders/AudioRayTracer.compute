@@ -3,12 +3,12 @@
 
 
 #define PI 3.14159265359
-
-uint seed;
+#define INF 1e30
 
 int maxRays;
 
 float deltaTime;
+uint frameCount;
 
 float3 listenerPosition;
 float3 listenerForward;
@@ -16,20 +16,27 @@ float3 listenerRight;
 
 struct Ray
 {
-    // basics for a ray
-    float3 position; // matches the listner position
+    float3 origin; 
     
-    float energy; // volume
-    
-    float3 direction; // matches the listener's forward x right 
-    
-    uint bounceCount; //times reflected
+    float3 direction;
 
-    
-    float distance; // distance traveled to calculate time delay
-    float3 padding;
 };
 RWStructuredBuffer<Ray> rayBuffer;
+
+
+struct RayHit
+{
+    float distance;
+    float3 surfaceNormal;
+    
+    int objectId;
+    int materialId;
+    
+    float energyPerBand[6];
+
+};
+RWStructuredBuffer<RayHit> rayHitBuffer;
+
 
 
 struct BVHNode
@@ -48,8 +55,24 @@ struct BVHNode
 };
 RWStructuredBuffer<BVHNode> tree;
 
+struct SourceData
+{
+    float3 origin;
+    float potential;
+    
+    int objectId;
+};
+StructuredBuffer<SourceData> sources;
+int sourceCount;
 
-
+struct PathData
+{
+    float distance;
+    float gain; // Based on 1/d^2 and absorption
+    float2 arrivalAngles; // Lateral (Left/Right) and Elevation (Up/Down)
+    int sourceId;
+};
+AppendStructuredBuffer<PathData> pathBuffer;
 
 
 // https://www.reedbeta.com/blog/hash-functions-for-gpu-rendering/
@@ -61,7 +84,7 @@ uint PcgHash(uint input)
 }
 
 // https://irrlicht.sourceforge.io/forum/viewtopic.php?t=53246 hash to unit [0,1)
-float Random()
+float Random(inout uint seed)
 {
     seed = PcgHash(seed);
     return float(seed & 0x00ffffffu) / float(0x01000000u);
@@ -69,10 +92,11 @@ float Random()
 
 float3 SphericalDistribution(uint1 id)
 {
-    seed = id;
+    uint seed;
+    seed = id + frameCount * 719393;
 
-    float theta = Random() * 2.0 * PI;
-    float u = Random() * 2.0 - 1.0;
+    float theta = Random(seed) * 2.0 * PI;
+    float u = Random(seed) * 2.0 - 1.0;
     
     float a = sqrt(max(0.0, 1.0 - u * u)); // to avoid negative values if we mess things up
 
@@ -84,7 +108,6 @@ float3 SphericalDistribution(uint1 id)
 
 }
 
-
 [numthreads(64,1,1)]
 void InitRays(uint3 id : SV_DispatchThreadID)
 {
@@ -95,13 +118,8 @@ void InitRays(uint3 id : SV_DispatchThreadID)
     
     Ray ray;
     
-    ray.position = listenerPosition;
+    ray.origin = listenerPosition;
     ray.direction = SphericalDistribution(id.x);
-    ray.energy = 1.0;
-    ray.distance = 0.0;
-    ray.bounceCount = 0;
-    
-    ray.padding = 0.0;
     
     rayBuffer[id.x] = ray;
 }
@@ -118,47 +136,93 @@ float RayAABB(float3 rayOrigin, float3 invDir, float3 aabbMin, float3 aabbMax, f
     float near = max(max(tMinVec.x, tMinVec.y), tMinVec.z);
     float far = min(min(tMaxVec.x, tMaxVec.y), tMaxVec.z);
 
-    bool hit = (near <= far) && (far > tMin) && (near < tMax);
+    bool hit = (far >= max(0.0, near)) && (near < tMax) && (far > tMin);
 
-    // Return the distance if hit, otherwise a "miss" value
     return hit ? max(near, tMin) : 1e30;
 }
 
 
-
-
-bool Intersect(float3 position, float3 direction)
+RayHit IntersectClosest(float3 origin, float3 direction, float maxDistance)
 {
     int stack[32];
     int stackCounter = 0;
     
     stack[stackCounter++] = 0;
-    int invDir = 1.0 / (direction + 0.00001); // to save us from division by zero
+    float3 invDir = 1.0 / (direction + 1e-9); // to save us from division by zero
+    
+    RayHit hit;
+    hit.distance = INF;
+    hit.materialId = -1;
+    hit.objectId = -1;
+    hit.surfaceNormal = float3(1, 1, 1);
+    hit.energyPerBand[0] = 0;
+    
     while (stackCounter > 0)
     {
         uint nodeIdx = stack[--stackCounter];
         BVHNode node = tree[nodeIdx];
         
-        if (RayAABB(position, direction, tree[stackCounter].aabbMin, tree[stackCounter].aabbMax,0.001, 1000) < 1e30)
+        float distance = RayAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
+        if (distance == INF)
+            continue;
+        
+        if (node.primitiveIndex != -1)
         {
-            if (tree[stackCounter].primitiveIndex != -1)
+            if (distance < hit.distance)
             {
-                // we hit a leaf node, so we can return true for now. Later on we will have to calculate the new direction, energy etc based on the material of the primitive
-                return true;
+                hit.distance = distance;
             }
-            else
-            {
-                // we hit an internal node, so we need to push its children to the stack
-                stack[stackCounter++] = node.leftChild;
-                stack[stackCounter++] = node.rightChild;
-            }
+
+        }
+        else
+        {
+            // we hit an internal node, so we need to push its children to the stack
+            stack[stackCounter++] = node.leftChild;
+            stack[stackCounter++] = node.rightChild;
+        }
+    }
+    return hit;
+}
+
+bool IntersectAny(float3 origin, float3 direction, float maxDistance, int ignoreObjectId)
+{
+    int stack[32];
+    int stackCounter = 0;
+    
+    stack[stackCounter++] = 0;
+    float3 invDir = 1.0 / (direction + 1e-9); // to save us from division by zero
+    
+    RayHit hit;
+    hit.distance = INF;
+    
+    while (stackCounter > 0)
+    {
+        uint nodeIdx = stack[--stackCounter];
+        BVHNode node = tree[nodeIdx];
+        
+        float distance = RayAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
+        if (distance == INF)
+            continue;
+        
+        if (node.primitiveIndex != -1)
+        {
+            if (node.primitiveIndex == ignoreObjectId)
+                continue;
+            
+            
+            return true;
+        }
+        else
+        {
+            // we hit an internal node, so we need to push its children to the stack
+            stack[stackCounter++] = node.leftChild;
+            stack[stackCounter++] = node.rightChild;
         }
     }
     return false;
 }
 
-
-[numthreads(8,8,1)]
+[numthreads(64,1,1)]
 void TraceRays(uint3 id : SV_DispatchThreadID)
 {
     if (id.x >= (uint) maxRays)
@@ -167,12 +231,7 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
     }
 
     Ray r = rayBuffer[id.x];
-    
-    if (r.energy <= 0.2) // arbitary number for now. this needs to be relevant to DB loss per hit
-    {
-        return;
-    }
-    
+        
     //we assume that speed of sound is 343.0 and we deal only with air for now. 
     // Later on we will have to pass a specific speed for each material we are dealing
     float speedOfSound = 343.0;
@@ -184,33 +243,68 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
     
     // we get the current position and direction of the ray
     
-    float3 currentPos = r.position;
+    float3 currentPos = r.origin;
     float3 currentDir = r.direction;
     
-    
-    
-    // we then need to evaluate the result of the intesection
-    if (Intersect(currentPos, currentDir))
+    //direct sound
+    if (id.x == 0)
     {
-        // if we hit something, we need to get it's material and calculate the new energy, reflections, bounce etc
-        
-        //for reflections change the direction!
-        
-        r.bounceCount += 1;
-    }
-    else
-    {
-        //else append the distance to the position
-        
-        r.position += currentDir * stepDistance;
-        
-        r.distance += stepDistance;
+        for (int i = 0; i < sourceCount; i++)
+        {
+            float3 toSource = sources[i].origin - listenerPosition;
+            float dist = length(toSource);
+            float3 dir = toSource / dist;
+
+            // Check if path is clear. Using -1 to ignore specific object logic for now.
+            if (!IntersectAny(listenerPosition, dir, dist, sources[i].objectId))
+            {
+                PathData directPath;
+                directPath.distance = dist;
+                directPath.gain = 1.0 / (dist * dist + 1.0); // Simple distance attenuation
+                directPath.sourceId = i;
+                
+                // Calculate local arrival for HRTF/Panning
+                float3 right = cross(listenerForward, float3(0, 1, 0));
+                directPath.arrivalAngles.x = dot(dir, right); // Lateral
+                directPath.arrivalAngles.y = dot(dir, float3(0, 1, 0)); // Elevation
+
+                pathBuffer.Append(directPath);
+            }
+        }
     }
     
-    rayBuffer[id.x] = r;
+    //for (int bounce = 0; bounce < 10; bounce++)
+    //{
+    //    RayHit hit = IntersectClosest(currentPos, currentDir, 1000);
         
+    //    if (hit.distance == INF)
+    //        break;
+
+    //    float3 hitPos = currentPos + currentDir * hit.distance;
+    //    float3 normal = normalize(hit.surfaceNormal);
+       
+    //    for (int i = 0; i < sourceCount; i++)
+    //    {
+    //        float3 toSource = sources[i].origin - hitPos;
+    //        float distToSource = length(toSource);
+    //        float3 dirToSource = toSource / distToSource;
+
+    //        bool occluded = IntersectAny(hitPos + normal * 0.001, dirToSource, distToSource, sources[i].objectId);
+
+    //        if (!occluded)
+    //        {
+    //            // accumulate contribution from this source
+    //        }
+    //    }
+
+    //    // REFLECTION
+    //    currentPos = hitPos + normal * 0.001;
+    //    currentDir = normalize(reflect(currentDir, normal));
+
+    //    // ENERGY LOSS
+    //   // energy *= 0.8;
+
+    //    //if (energy < 0.01)
+    //    //    break;
+    //}
 }
-
-
-
-

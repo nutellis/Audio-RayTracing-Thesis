@@ -129,34 +129,35 @@ public class BVHManager : MonoBehaviour
 
     void CollectBounds()
     {
-        Renderer[] renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.InstanceID);
+        // get all objects with a collider
+        Collider[] colliders = FindObjectsByType<Collider>(FindObjectsSortMode.InstanceID);
 
-        if (renderers.Length == 0)
+        if (colliders.Length == 0)
         {
-            Debug.LogWarning("No renderers found in the scene.");
+            Debug.LogWarning("No colliders found in the scene.");
             return;
         }
-        objectCount = renderers.Length;
+        objectCount = colliders.Length;
 
 
         primitiveCentroids.Clear();
         primitiveIds.Clear();
         primitiveBounds.Clear();
-        sceneBounds = renderers[0].bounds;
+        sceneBounds = colliders[0].bounds;
 
-        foreach (Renderer renderer in renderers)
+        foreach (Collider collider in colliders)
         {
-            if (renderer.enabled)
+            if (collider.enabled)
             {
-                PrimitiveInfo info = new PrimitiveInfo(renderer.GetInstanceID(), renderer.bounds);
-                primitiveCentroids.Add(renderer.bounds.center);
-                primitiveIds.Add(renderer.GetInstanceID());
+                PrimitiveInfo info = new PrimitiveInfo(collider.GetInstanceID(), collider.bounds);
+                primitiveCentroids.Add(collider.bounds.center);
+                primitiveIds.Add(collider.GetInstanceID());
 
-                primitiveBounds.Add(renderer.bounds);
+                primitiveBounds.Add(collider.bounds);
 
 
                 //get scene bounds
-                sceneBounds.Encapsulate(renderer.bounds);
+                sceneBounds.Encapsulate(collider.bounds);
             }
         }
     }
@@ -368,12 +369,11 @@ public class BVHManager : MonoBehaviour
         atomicFlagsBuffer = new ComputeBuffer(objectCount - 1, sizeof(int));
         zeroFlags = new int[objectCount - 1];
 
-        // 1.Prepare leaf data(Min and Max for each renderer)
+        // repare leaf data(Min and Max for each renderer)
             Vector3[] rawBounds = new Vector3[objectCount * 2];
 
         for (int i = 0; i < objectCount; i++)
         {
-            // Use your original primitive list/renderers here
             rawBounds[i * 2] = primitiveBounds[i].min;
             rawBounds[i * 2 + 1] = primitiveBounds[i].max;
         }
@@ -383,10 +383,8 @@ public class BVHManager : MonoBehaviour
 
     void RefitBVH()
     {
-       // 1. CLEAR FLAGS (Critical step)
         atomicFlagsBuffer.SetData(zeroFlags);
 
-        // 3. Dispatch
         int groups = Mathf.CeilToInt(objectCount / 64.0f);
         bvhGeneratorShader.SetBuffer(fitKernel, "bvhNodes", bvhNodeBuffer);
         bvhGeneratorShader.SetBuffer(fitKernel, "leafBoundsBuffer", leafBoundsBuffer);
@@ -396,6 +394,7 @@ public class BVHManager : MonoBehaviour
 
     public int debugDepth = 5; // Use a slider to see different levels
 
+#if UNITY_EDITOR
     void OnDrawGizmos()
     {
         if (bvhNodeBuffer == null || objectCount == 0) return;
@@ -449,4 +448,5 @@ public class BVHManager : MonoBehaviour
             DrawNode(nodes, node.rightChild, currentDepth + 1);
         }
     }
+#endif
 }
