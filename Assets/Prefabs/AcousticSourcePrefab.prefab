@@ -12,7 +12,6 @@ GameObject:
   - component: {fileID: 8588375981165258700}
   - component: {fileID: 5530673790591139551}
   - component: {fileID: 645352698960719863}
-  - component: {fileID: 5693447835734898205}
   - component: {fileID: 888844346557568618}
   m_Layer: 0
   m_Name: AcousticSourcePrefab
@@ -114,19 +113,6 @@ SphereCollider:
   serializedVersion: 3
   m_Radius: 1
   m_Center: {x: 0, y: 0, z: 0}
---- !u!114 &5693447835734898205
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 6005852306604373061}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 927c418e39bfb1b4a9371675415044f6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::AcousticObject
-  acousticMaterial: {fileID: 11400000, guid: 357d2252588831443a141952231df429, type: 2}
 --- !u!114 &888844346557568618
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -136,7 +122,7 @@ MonoBehaviour:
   m_GameObject: {fileID: 6005852306604373061}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: bb87fe3727a91514595817d275756497, type: 3}
+  m_Script: {fileID: 11500000, guid: 842c1a69d4ac2f043a63bb4ba2161166, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::AcousticSource
   audioClip: {fileID: 0}

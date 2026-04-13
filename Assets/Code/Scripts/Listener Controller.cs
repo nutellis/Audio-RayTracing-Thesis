@@ -7,39 +7,23 @@ public class ListenerController : MonoBehaviour
 
     public ComputeShader audioShader;
 
-
-    public uint maxRays = 1024;
-    //[SerializeField]
-    private BVHManager BVH;
-
     ComputeBuffer rayBuffer;
     int initKernel;
     int traceKernel;
 
-
-
-
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-     //   initKernel = audioShader.FindKernel("InitRays");
-        traceKernel = audioShader.FindKernel("TraceRays");
-
-        SetupComputeBuffer();
-
-        SetupShader();
-
-        int groups = Mathf.CeilToInt(maxRays / 64f);
-        audioShader.Dispatch(initKernel, groups, 1, 1);
+       
 
     }
 
     // Update is called once per frame
     void Update()
     {
-        UpdateShaderData();
+       // UpdateShaderData();
 
-        int groups = Mathf.CeilToInt(maxRays / 64f);
+       // int groups = Mathf.CeilToInt(maxRays / 64f);
 
 
        // audioShader.Dispatch(traceKernel, groups, 1, 1);
@@ -49,6 +33,19 @@ public class ListenerController : MonoBehaviour
     {
         rayBuffer?.Release();
 
+    }
+
+    public void InitializeRays(int maxRays)
+    {
+        initKernel = audioShader.FindKernel("InitRays");
+        //  traceKernel = audioShader.FindKernel("TraceRays");
+
+        SetupComputeBuffer(maxRays);
+
+        SetupShader(maxRays);
+
+        int groups = Mathf.CeilToInt(maxRays / 64f);
+        audioShader.Dispatch(initKernel, groups, 1, 1);
     }
 
 
@@ -61,7 +58,7 @@ public class ListenerController : MonoBehaviour
     }
 
 
-    void SetupComputeBuffer()
+    void SetupComputeBuffer(int maxRays)
     {
 
         int stride = Marshal.SizeOf(typeof(Ray));
@@ -73,7 +70,7 @@ public class ListenerController : MonoBehaviour
 
     }
 
-    private void SetupShader()
+    private void SetupShader(int maxRays)
     {
         audioShader.SetInt("maxRays", ((int)maxRays));
 

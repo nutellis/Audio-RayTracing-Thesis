@@ -38,7 +38,6 @@ struct RayHit
 RWStructuredBuffer<RayHit> rayHitBuffer;
 
 
-
 struct BVHNode
 {
     //leaf data
@@ -55,21 +54,24 @@ struct BVHNode
 };
 RWStructuredBuffer<BVHNode> tree;
 
+
 struct SourceData
 {
     float3 origin;
-    float potential;
     
-    int objectId;
+    int sourceId;
 };
 StructuredBuffer<SourceData> sources;
+
 int sourceCount;
 
 struct PathData
 {
-    float distance;
-    float gain; // Based on 1/d^2 and absorption
     float2 arrivalAngles; // Lateral (Left/Right) and Elevation (Up/Down)
+
+    float distance;
+    float gain; // Based on 1/d^2 and later absorption
+    
     int sourceId;
 };
 AppendStructuredBuffer<PathData> pathBuffer;
@@ -92,8 +94,7 @@ float Random(inout uint seed)
 
 float3 SphericalDistribution(uint1 id)
 {
-    uint seed;
-    seed = id + frameCount * 719393;
+    uint seed = id + frameCount * 719393;
 
     float theta = Random(seed) * 2.0 * PI;
     float u = Random(seed) * 2.0 - 1.0;
@@ -232,7 +233,7 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
 
     Ray r = rayBuffer[id.x];
         
-    //we assume that speed of sound is 343.0 and we deal only with air for now. 
+    //we assume that speed of sound is 343.0, and we deal only with air for now. 
     // Later on we will have to pass a specific speed for each material we are dealing
     float speedOfSound = 343.0;
     
@@ -255,13 +256,13 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
             float dist = length(toSource);
             float3 dir = toSource / dist;
 
-            // Check if path is clear. Using -1 to ignore specific object logic for now.
-            if (!IntersectAny(listenerPosition, dir, dist, sources[i].objectId))
+            // Check if path to a sound source is clear
+            if (!IntersectAny(listenerPosition, dir, dist, sources[i].sourceId))
             {
                 PathData directPath;
                 directPath.distance = dist;
-                directPath.gain = 1.0 / (dist * dist + 1.0); // Simple distance attenuation
-                directPath.sourceId = i;
+                directPath.gain = 1.0 / (dist * dist + 1.0); // distance attenuation
+                directPath.sourceId = sources[i].sourceId;
                 
                 // Calculate local arrival for HRTF/Panning
                 float3 right = cross(listenerForward, float3(0, 1, 0));

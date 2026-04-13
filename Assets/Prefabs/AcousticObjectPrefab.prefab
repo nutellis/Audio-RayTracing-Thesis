@@ -122,7 +122,7 @@ MonoBehaviour:
   m_GameObject: {fileID: 5601785797149769991}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 927c418e39bfb1b4a9371675415044f6, type: 3}
+  m_Script: {fileID: 11500000, guid: 23d01d7bab02485449dc02d1c8a6de87, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::AcousticObject
-  acousticMaterial: {fileID: 11400000, guid: 357d2252588831443a141952231df429, type: 2}
+  acousticMaterial: {fileID: 0}

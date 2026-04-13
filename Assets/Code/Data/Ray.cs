@@ -5,14 +5,14 @@ using UnityEngine;
 public struct Ray
 {
     public Vector3 position;
-    public float energy; // volume
+    //public float energy; // volume
 
 
     public Vector3 direction;
-    public uint bounceCount; //times reflected
+    //public uint bounceCount; //times reflected
 
 
-    public float distance; // distance traveled to calculate time delay
+   // public float distance; // distance traveled to calculate time delay
 
-    public Vector3 padding; //12 bytes padding to get to 16 bytes
+   // public Vector3 padding; //12 bytes padding to get to 16 bytes
 }

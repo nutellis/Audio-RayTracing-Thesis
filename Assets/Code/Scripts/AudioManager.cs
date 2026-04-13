@@ -7,11 +7,19 @@ using UnityEngine.Rendering;
 [StructLayout(LayoutKind.Sequential)]
 public struct PathData
 {
+    public Vector2 arrivalAngles;
     public float distance;
     public float gain;
-    public Vector2 arrivalAngles;
+    
     public int sourceId;
 }
+public struct SourceData
+{
+    public Vector3 origin;
+    
+    public int sourceId;
+};
+
 
 public class AudioManager : MonoBehaviour
 {
@@ -20,30 +28,45 @@ public class AudioManager : MonoBehaviour
 
     AcousticSource[] audioSources;
 
-    AudioListener listener;
+    ListenerController listener;
 
     public int maxDb = 120;
 
     public ComputeShader audioShader;
 
-    public uint maxRays = 1024;
+    public int maxRays = 1024;
 
-    ComputeBuffer rayBuffer;
+    ComputeBuffer sourcesBuffer;
 
     ComputeBuffer pathBuffer;
     ComputeBuffer countBuffer;
     int maxPaths = 10000;
 
+    int traceKernel;
+
+
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        listener = FindFirstObjectByType<AudioListener>();
+        listener = FindFirstObjectByType <ListenerController> ();
+
+        listener.InitializeRays(maxRays);
+
         //find all audio sources in the scene
         audioSources = FindObjectsByType<AcousticSource>(FindObjectsSortMode.InstanceID);
 
-        pathBuffer = new ComputeBuffer(10,20, ComputeBufferType.Append);
-        audioShader.SetBuffer(0, "pathBuffer", pathBuffer);
+        traceKernel = audioShader.FindKernel("TraceRays");
+        
+        // successful paths data
+        pathBuffer = new ComputeBuffer(1, Marshal.SizeOf(typeof(PathData))); // , ComputeBufferType.Append);
+
+        audioShader.SetBuffer(traceKernel, "pathBuffer", pathBuffer);
+
+        //sources buffer
+        sourcesBuffer = new ComputeBuffer(audioSources.Length < 64 ? audioSources.Length : 64, Marshal.SizeOf(typeof(SourceData)));
+
+        audioShader.SetBuffer(traceKernel, "sources", sourcesBuffer);
     }
 
     // Update is called once per frame
@@ -61,32 +84,57 @@ public class AudioManager : MonoBehaviour
         .Select(x => x.Target)
         .ToList();
 
-        //Debug.Log("sorting done");
-
-        pathBuffer.SetCounterValue(0);
-
-        // 2. Set and Dispatch
-        int kernel = audioShader.FindKernel("TraceRays");
-        audioShader.SetBuffer(kernel, "pathBuffer", pathBuffer);
-        audioShader.Dispatch(kernel, 1024 / 64, 1, 1);
-
-        // 3. Request the data without stalling the CPU
-        ComputeBuffer.CopyCount(pathBuffer, countBuffer, 0);
-        AsyncGPUReadback.Request(pathBuffer, OnPathDataReadback);
+        SetupSourceBuffer(sources);
     }
 
+    private void LateUpdate()
+    {
+        //update the tree
+        bvhManager.UpdateBVH();
+
+        audioShader.SetBuffer(traceKernel, "tree", bvhManager.GetBVHBuffer());
+
+        //trace rays
+        pathBuffer.SetCounterValue(0);
+
+        audioShader.SetBuffer(traceKernel, "pathBuffer", pathBuffer);
+        audioShader.Dispatch(traceKernel, maxRays / 64, 1, 1);
+
+
+        //debug
+        PathData[] paths = new PathData[1];
+        pathBuffer.GetData(paths);
+
+        for(int i = 0; i < paths.Length; i++)
+        {
+            if (paths[i].distance > 0)
+            {
+                Debug.Log($"Path {i}: Distance={paths[i].distance}, Gain={paths[i].gain}, ArrivalAngles={paths[i].arrivalAngles}, SourceId={paths[i].sourceId}");
+            }
+        }
+        Debug.Log($"Total valid paths: {paths.Count(p => p.distance > 0)}");
+        // ComputeBuffer.CopyCount(pathBuffer, countBuffer, 0);
+        // AsyncGPUReadback.Request(pathBuffer, OnPathDataReadback);
+    }
+
+    private void OnDestroy()
+    {
+        pathBuffer?.Release();
+        countBuffer?.Release();
+        sourcesBuffer?.Release();
+    }
     void OnPathDataReadback(AsyncGPUReadbackRequest request)
     {
         if (request.hasError) return;
 
-        var data = request.GetData<PathData>();
+        var data = request.GetData<PathData>().ToArray();
 
         // Note: Since this is async, you might want to read the countBuffer 
         // to know exactly how many elements in 'data' are valid.
         ProcessAudioPaths(data);
     }
 
-    void ProcessAudioPaths(Unity.Collections.NativeArray<PathData> paths)
+    void ProcessAudioPaths(PathData[] paths)
     {
         foreach (var path in paths)
         {
@@ -99,6 +147,17 @@ public class AudioManager : MonoBehaviour
             // SEND TO YOUR AUDIO ENGINE:
             //AudioEngine.AddTap(path.sourceId, delaySeconds, volume, pan);
         }
+    }
+
+    void SetupSourceBuffer(List<AcousticSource> sources)
+    {
+            SourceData[] sourceDataArray = sources.Select((source, index) => new SourceData
+            {
+                origin = source.transform.position,
+                sourceId = source.GetInstanceID()
+            }).ToArray();
+
+            sourcesBuffer.SetData(sourceDataArray);
     }
 
     void InitBuffers()

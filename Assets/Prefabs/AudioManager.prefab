@@ -42,12 +42,12 @@ MonoBehaviour:
   m_GameObject: {fileID: 7836914386354729547}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 210e87b86470ae74bac2bd88dfe226de, type: 3}
+  m_Script: {fileID: 11500000, guid: b12a9c3516a115149813cbb6a1804470, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::AudioManager
   bvhManager: {fileID: 6505568985224683670}
   maxDb: 120
-  audioShader: {fileID: 7200000, guid: e31fd950a8f1d374eb1d35b04bcbbed5, type: 3}
+  audioShader: {fileID: 7200000, guid: 0a9cf31432f0a374eba02b4e366c453b, type: 3}
   maxRays: 1024
 --- !u!114 &6505568985224683670
 MonoBehaviour:
@@ -58,8 +58,8 @@ MonoBehaviour:
   m_GameObject: {fileID: 7836914386354729547}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 010c569a834e9ac4f8c9e500624df3ef, type: 3}
+  m_Script: {fileID: 11500000, guid: c7a507aa9b6cf744fa5a288ea15388d9, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::BVHManager
-  bvhGeneratorShader: {fileID: 7200000, guid: a6a53260ffa230c48b0c93b0143795f8, type: 3}
+  bvhGeneratorShader: {fileID: 7200000, guid: d7895a15c0190064280409679829f9d4, type: 3}
   debugDepth: 5

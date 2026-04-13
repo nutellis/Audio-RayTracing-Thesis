@@ -121,6 +121,11 @@ public class BVHManager : MonoBehaviour
     private void LateUpdate()
     {
         // CollectBounds(); // this is a bottleneck. We need  to update it only if something changes. For now it will be called once on start.
+       
+    }
+
+    public void UpdateBVH()
+    {
         MortonGenerationBuffersSetup();
         RadixSort();
         BuildTree();
@@ -161,97 +166,6 @@ public class BVHManager : MonoBehaviour
             }
         }
     }
-
-    //private void OnDrawGizmos()
-    //{
-    //    Gizmos.color = new Color(0f, 1f, 0f, 0.1f);
-    //    Gizmos.DrawCube(sceneBounds.center, sceneBounds.size);
-
-    //    Gizmos.color = new Color(0f, 1f, 0f, 1f);
-    //    Gizmos.DrawWireCube(sceneBounds.center, sceneBounds.size);
-    //}
-
-    // https://medium.com/@Ksatese/advanced-ray-tracer-part-2-f5313530581c
-    //void BuildTLAS(PrimitiveInfo[] primitives, int startIndex, int endIndex, BVHNode parent)
-    //{
-
-    //    if (endIndex - startIndex <= 1)
-    //    {
-    //        //create leaf node
-    //        int primitiveIndex = primitives[startIndex].primitiveIndex;
-    //        parent.primitiveIndex = primitiveIndex;
-    //        parent.bounds = primitives[startIndex].bounds;
-    //        //Debug.Log("Primitive leaf node added on tree");
-
-    //        //var renderers = FindObjectsByType<Renderer>(FindObjectsSortMode.InstanceID).ToList<Renderer>();
-
-    //        //// find the instanceid and return the renderer, only debug
-    //        //var renderer = renderers.Find(x => x.GetInstanceID() == primitiveIndex);
-    //        //Debug.Log($"renderer's name is: {renderer.name}");
-    //        return;
-    //    }
-    //    else
-    //    {
-    //        for (int i = startIndex; i < endIndex; i++)
-    //        {
-    //            parent.bounds.Encapsulate(primitives[i].bounds);
-    //        }
-
-    //        Vector3 extents = parent.bounds.max - parent.bounds.min;
-    //        int splitAxis = 0;
-    //        if (extents.y > extents.x) splitAxis = 1;
-    //        if (extents.z > extents[splitAxis]) splitAxis = 2;
-
-    //        //sort the primitives by their center along the axis we want to split so 
-    //        // that we now that from start to mid are the left primitives and 
-    //        // the rest are the right primitives
-    //        Array.Sort(primitives, startIndex, endIndex - startIndex, Comparer<PrimitiveInfo>.Create((a, b) =>
-    //        {
-    //            float aCentroid = a.bounds.center[splitAxis];
-    //            float bCentroid = b.bounds.center[splitAxis];
-    //            return aCentroid.CompareTo(bCentroid);
-    //        }));
-
-    //        int mid = startIndex + (endIndex - startIndex) / 2;
-
-
-    //        // run for the left side 
-    //        BVHNode left = parent.leftChild = new BVHNode();
-    //        // Debug.Log("Going left");
-    //        BuildTLAS(primitives, startIndex, mid, left);
-
-
-    //        // run for the right side
-    //        BVHNode right = parent.rightChild = new BVHNode();
-    //        //Debug.Log("Going right");
-    //        BuildTLAS(primitives, mid, endIndex, right);
-    //    }
-    //}
-
-    //public int FlattenTLAS(BVHNode node, List<GPUNode> nodeTree, int i)
-    //{
-    //    if (node == null) return i;
-
-    //    // Get data from the current node
-    //    GPUNode gpuNode = new GPUNode
-    //    {
-    //        aabbMin = node.bounds.min,
-    //        aabbMax = node.bounds.max,
-    //        primitiveIndex = node.IsLeaf ? node.primitiveIndex : 0,
-
-    //        // siblingIndex = node.rightChild
-    //    };
-    //    nodeTree[i] = gpuNode;
-
-    //    // Flatten left subtree
-    //    i = FlattenTLAS(node.leftChild, nodeTree, i);
-
-
-    //    // Flatten right subtree
-    //    i = FlattenTLAS(node.rightChild, nodeTree, i + 1);
-    //    return i;
-    //}
-
 
     void InitializeBuffers()
     {
@@ -357,7 +271,6 @@ public class BVHManager : MonoBehaviour
 
         bvhGeneratorShader.SetBuffer(hierarchyKernel, "deltas", deltas);
 
-
         bvhGeneratorShader.Dispatch(hierarchyKernel, groups, 1, 1);
     }
 
@@ -365,6 +278,7 @@ public class BVHManager : MonoBehaviour
     {
         // 2 Vector3s (Min/Max) per object
         leafBoundsBuffer = new ComputeBuffer(objectCount * 2, sizeof(float) * 3);
+
         // One flag per internal node
         atomicFlagsBuffer = new ComputeBuffer(objectCount - 1, sizeof(int));
         zeroFlags = new int[objectCount - 1];
@@ -392,7 +306,7 @@ public class BVHManager : MonoBehaviour
         bvhGeneratorShader.Dispatch(fitKernel, groups, 1, 1);
     }
 
-    public int debugDepth = 5; // Use a slider to see different levels
+    public int debugDepth = 5;
 
 #if UNITY_EDITOR
     void OnDrawGizmos()
@@ -449,4 +363,9 @@ public class BVHManager : MonoBehaviour
         }
     }
 #endif
+
+    public ComputeBuffer GetBVHBuffer()
+    {
+        return bvhNodeBuffer;
+    }
 }
