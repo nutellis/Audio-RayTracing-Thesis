@@ -122,11 +122,11 @@ MonoBehaviour:
   m_GameObject: {fileID: 6005852306604373061}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 842c1a69d4ac2f043a63bb4ba2161166, type: 3}
+  m_Script: {fileID: 11500000, guid: bb87fe3727a91514595817d275756497, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::AcousticSource
-  audioClip: {fileID: 0}
+  audioClip: {fileID: 8300000, guid: 3f082f88ac2ab204abcc8b45cc182a86, type: 3}
   audioSource: {fileID: 0}
-  profile: {fileID: 0}
+  profile: {fileID: 11400000, guid: 29e2a3c7447fb714c9383bf4fa5226a0, type: 2}
   manualDb: 0
   energy: 0
