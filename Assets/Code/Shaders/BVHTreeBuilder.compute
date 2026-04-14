@@ -19,6 +19,8 @@ cbuffer MortonCodeGenerationParams
 StructuredBuffer<float3> centroidsBuffer;
 RWStructuredBuffer<int> primitiveIndicesBuffer;
 
+StructuredBuffer<int> primitiveObjectIds;
+
 RWStructuredBuffer<uint> mortonCodesBuffer;
 
 
@@ -189,9 +191,9 @@ void ScatterPass(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uin
 
     // Calculate Local Rank: count identical digits appearing BEFORE me in this block. 
     // If my digit is 3, count how many 3s appear before me in this block. This gives me my local rank for this digit in this block.
-    uint localRank = 0;
     if (active)
     {
+        uint localRank = 0;
         for (uint i = 0; i < localID; i++)
         {
             if (s_digits[i] == digit)
@@ -218,6 +220,10 @@ struct BVHNode
     int rightChild;
     
     int parent;
+    
+    int objectId;
+    
+    float padding;
 
 };
 RWStructuredBuffer<BVHNode> bvhNodes; // Size: 2N - 1
@@ -315,6 +321,7 @@ void BuildHierarchy(uint3 id : SV_DispatchThreadID)
     {
         leftChild = (objectCount - 1 + gamma); // cause leaf nodes are stored after internal nodes. bvh tree is 2N-1 meaning that N-1 are internal and the rest N are the actual leaf nodes
         bvhNodes[leftChild].primitiveIndex = sortedIndices[gamma];
+        bvhNodes[leftChild].objectId = primitiveObjectIds[sortedIndices[gamma]];
     }
     else // internal node
     {
@@ -325,7 +332,7 @@ void BuildHierarchy(uint3 id : SV_DispatchThreadID)
     {
         rightChild = (objectCount - 1 + (gamma + 1));
         bvhNodes[rightChild].primitiveIndex = sortedIndices[gamma + 1];
-
+        bvhNodes[rightChild].objectId = primitiveObjectIds[sortedIndices[gamma + 1]];
     }
     else
     {
@@ -342,7 +349,7 @@ void BuildHierarchy(uint3 id : SV_DispatchThreadID)
     bvhNodes[i].primitiveIndex = -1;
     
     
-    deltas[i] = int4(d, j, l, gamma);
+    deltas[i] = int4(0, 0, 0, 0);
 }
 
 

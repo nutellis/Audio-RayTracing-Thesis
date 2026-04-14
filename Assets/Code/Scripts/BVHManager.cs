@@ -27,6 +27,10 @@ public class BVHManager : MonoBehaviour
         public int rightChild;
 
         public int parent;
+
+        public int objectID;
+        
+        float padding;
     }
 
     List<int> primitiveIds;
@@ -48,6 +52,7 @@ public class BVHManager : MonoBehaviour
     ComputeBuffer centroidsBuffer;
     ComputeBuffer mortonCodesBuffer;
     ComputeBuffer primitiveIndicesBuffer;
+    ComputeBuffer primitiveObjectIds;
     ComputeBuffer deltas;
 
     ComputeBuffer outMortonBuffer;
@@ -154,9 +159,8 @@ public class BVHManager : MonoBehaviour
         {
             if (collider.enabled)
             {
-                PrimitiveInfo info = new PrimitiveInfo(collider.GetInstanceID(), collider.bounds);
                 primitiveCentroids.Add(collider.bounds.center);
-                primitiveIds.Add(collider.GetInstanceID());
+                primitiveIds.Add(collider.gameObject.GetInstanceID());
 
                 primitiveBounds.Add(collider.bounds);
 
@@ -172,6 +176,7 @@ public class BVHManager : MonoBehaviour
         centroidsBuffer = new ComputeBuffer(objectCount, sizeof(float) * 3);
         mortonCodesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
         primitiveIndicesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
+        primitiveObjectIds = new ComputeBuffer(objectCount, sizeof(int));
 
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "centroidsBuffer", centroidsBuffer);
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "mortonCodesBuffer", mortonCodesBuffer);
@@ -193,7 +198,7 @@ public class BVHManager : MonoBehaviour
         bvhGeneratorShader.SetVector("sceneMax", sceneBounds.max);
 
         centroidsBuffer.SetData(primitiveCentroids);
-        primitiveIndicesBuffer.SetData(primitiveIds);
+        primitiveObjectIds.SetData(primitiveIds);
 
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "centroidsBuffer", centroidsBuffer);
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "primitiveIndicesBuffer", primitiveIndicesBuffer);
@@ -246,7 +251,7 @@ public class BVHManager : MonoBehaviour
         // Internal nodes: 0 to N-2
         // Leaf nodes: N-1 to 2N-2
         int totalNodes = (objectCount * 2) - 1;
-        bvhNodeBuffer = new ComputeBuffer(totalNodes, sizeof(float) * 6 + sizeof(int) * 4);
+        bvhNodeBuffer = new ComputeBuffer(totalNodes, Marshal.SizeOf(typeof(GPUNode)));
         GPUNode[] clearNodes = new GPUNode[totalNodes];
         for (int i = 0; i < totalNodes; i++)
         {
@@ -268,6 +273,7 @@ public class BVHManager : MonoBehaviour
         bvhGeneratorShader.SetBuffer(hierarchyKernel, "bvhNodes", bvhNodeBuffer);
         bvhGeneratorShader.SetBuffer(hierarchyKernel, "sortedMortonCodes", mortonCodesBuffer);
         bvhGeneratorShader.SetBuffer(hierarchyKernel, "sortedIndices", primitiveIndicesBuffer);
+        bvhGeneratorShader.SetBuffer(hierarchyKernel, "primitiveObjectIds", primitiveObjectIds);
 
         bvhGeneratorShader.SetBuffer(hierarchyKernel, "deltas", deltas);
 
@@ -360,6 +366,15 @@ public class BVHManager : MonoBehaviour
         {
             DrawNode(nodes, node.leftChild, currentDepth + 1);
             DrawNode(nodes, node.rightChild, currentDepth + 1);
+        }
+        if (node.primitiveIndex != -1)
+        {
+            int id = node.objectID;
+            Vector3 labelPos = center + Vector3.up * 0.05f;
+            
+            string label =  $"ID: {id}";
+
+            UnityEditor.Handles.Label(labelPos, label);
         }
     }
 #endif

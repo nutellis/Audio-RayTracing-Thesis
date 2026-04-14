@@ -5,20 +5,36 @@
 #define PI 3.14159265359
 #define INF 1e30
 
-int maxRays;
+int initialRays;
 
 float deltaTime;
 uint frameCount;
 
-float3 listenerPosition;
-float3 listenerForward;
-float3 listenerRight;
+
+cbuffer ListenerInformation
+{
+    float3 listenerPosition;
+    float3 listenerForward;
+    float3 listenerRight;
+    int listenerId;
+};
+
+struct DebugInfo
+{
+    int index;
+    int sourceIndex;
+    
+    float2 padding;
+};
+RWStructuredBuffer<DebugInfo> debugInfo;
 
 struct Ray
 {
     float3 origin; 
     
     float3 direction;
+    
+    float2 padding;
 
 };
 RWStructuredBuffer<Ray> rayBuffer;
@@ -43,6 +59,7 @@ struct BVHNode
     //leaf data
     float3 aabbMin;
     float3 aabbMax;
+    
     int primitiveIndex;
 
     //internal data
@@ -50,6 +67,9 @@ struct BVHNode
     int rightChild;
     
     int parent;
+    int objectId;
+    
+    float padding;
 
 };
 RWStructuredBuffer<BVHNode> tree;
@@ -62,7 +82,6 @@ struct SourceData
     int sourceId;
 };
 StructuredBuffer<SourceData> sources;
-
 int sourceCount;
 
 struct PathData
@@ -73,6 +92,8 @@ struct PathData
     float gain; // Based on 1/d^2 and later absorption
     
     int sourceId;
+    
+    float3 padding;
 };
 AppendStructuredBuffer<PathData> pathBuffer;
 
@@ -112,7 +133,7 @@ float3 SphericalDistribution(uint1 id)
 [numthreads(64,1,1)]
 void InitRays(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x >= (uint) maxRays)
+    if (id.x >= (uint) initialRays)
     {
         return;
     }
@@ -121,6 +142,7 @@ void InitRays(uint3 id : SV_DispatchThreadID)
     
     ray.origin = listenerPosition;
     ray.direction = SphericalDistribution(id.x);
+    ray.padding = float2(0.0f, 0.0f);
     
     rayBuffer[id.x] = ray;
 }
@@ -185,7 +207,7 @@ RayHit IntersectClosest(float3 origin, float3 direction, float maxDistance)
     return hit;
 }
 
-bool IntersectAny(float3 origin, float3 direction, float maxDistance, int ignoreObjectId)
+bool IntersectAny(float3 origin, float3 direction, float maxDistance, int2 ignoreObjectsId)
 {
     int stack[32];
     int stackCounter = 0;
@@ -202,15 +224,21 @@ bool IntersectAny(float3 origin, float3 direction, float maxDistance, int ignore
         BVHNode node = tree[nodeIdx];
         
         float distance = RayAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
-        if (distance == INF)
-            continue;
         
-        if (node.primitiveIndex != -1)
+        if (distance == INF)
         {
-            if (node.primitiveIndex == ignoreObjectId)
+            continue;
+        }
+        
+        if ( node.primitiveIndex != -1)
+        {
+            debugInfo[0].index = node.objectId;
+            
+            if (node.objectId == ignoreObjectsId.x || node.objectId == ignoreObjectsId.y)
+            {
                 continue;
-            
-            
+            }
+
             return true;
         }
         else
@@ -226,7 +254,7 @@ bool IntersectAny(float3 origin, float3 direction, float maxDistance, int ignore
 [numthreads(64,1,1)]
 void TraceRays(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x >= (uint) maxRays)
+    if (id.x >= (uint) initialRays)
     {
         return;
     }
@@ -250,19 +278,21 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
     //direct sound
     if (id.x == 0)
     {
+        // i call these direct rays but they are not "rays"
         for (int i = 0; i < sourceCount; i++)
         {
             float3 toSource = sources[i].origin - listenerPosition;
             float dist = length(toSource);
             float3 dir = toSource / dist;
-
+            
             // Check if path to a sound source is clear
-            if (!IntersectAny(listenerPosition, dir, dist, sources[i].sourceId))
+            if (!IntersectAny(listenerPosition, dir, dist, int2(sources[i].sourceId, listenerId)))
             {
                 PathData directPath;
                 directPath.distance = dist;
                 directPath.gain = 1.0 / (dist * dist + 1.0); // distance attenuation
                 directPath.sourceId = sources[i].sourceId;
+                directPath.padding = float3(0, 0, 0);
                 
                 // Calculate local arrival for HRTF/Panning
                 float3 right = cross(listenerForward, float3(0, 1, 0));

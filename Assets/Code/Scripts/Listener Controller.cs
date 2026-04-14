@@ -35,16 +35,16 @@ public class ListenerController : MonoBehaviour
 
     }
 
-    public void InitializeRays(int maxRays)
+    public void InitializeRays(int initialRays)
     {
         initKernel = audioShader.FindKernel("InitRays");
         //  traceKernel = audioShader.FindKernel("TraceRays");
 
-        SetupComputeBuffer(maxRays);
+        SetupComputeBuffer(initialRays);
 
-        SetupShader(maxRays);
+        SetupShader(initialRays);
 
-        int groups = Mathf.CeilToInt(maxRays / 64f);
+        int groups = Mathf.CeilToInt(initialRays / 64f);
         audioShader.Dispatch(initKernel, groups, 1, 1);
     }
 
@@ -54,31 +54,31 @@ public class ListenerController : MonoBehaviour
         audioShader.SetVector("listenerPosition", transform.position);
         audioShader.SetVector("listenerForward", transform.forward);
         audioShader.SetVector("listenerRight", transform.right);
-
+        audioShader.SetInt("listenerId", gameObject.GetInstanceID());
     }
 
 
-    void SetupComputeBuffer(int maxRays)
+    void SetupComputeBuffer(int initialRays)
     {
 
         int stride = Marshal.SizeOf(typeof(Ray));
-       // Debug.Log("Stride: " + stride);
-        rayBuffer = new ComputeBuffer(((int)maxRays), stride);
+
+        rayBuffer = new ComputeBuffer(initialRays, stride);
 
         audioShader.SetBuffer(initKernel, "rayBuffer", rayBuffer);
         audioShader.SetBuffer(traceKernel, "rayBuffer", rayBuffer);
 
     }
 
-    private void SetupShader(int maxRays)
+    private void SetupShader(int initialRays)
     {
-        audioShader.SetInt("maxRays", ((int)maxRays));
+        audioShader.SetInt("initialRays", initialRays);
 
         UpdateShaderData();
     }
 
 #if UNITY_EDITOR
-    private void OnDrawGizmos()
+    /*private void OnDrawGizmos()
     {
         if(rayBuffer != null)
         {
@@ -100,6 +100,6 @@ public class ListenerController : MonoBehaviour
                 Gizmos.DrawSphere(ray.position + (ray.direction * 10), 0.05f);
             }
         }
-    }
+    }*/
 #endif
 }
