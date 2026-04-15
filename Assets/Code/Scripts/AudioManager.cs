@@ -39,27 +39,26 @@ public class AudioManager : MonoBehaviour
     BVHManager bvhManager;
 
     Dictionary<int, AcousticSource> audioSources;
+    Dictionary<int, AcousticSource> delayedAudioSources;
 
     ListenerController listener;
 
     public int maxDb = 120;
 
+    int traceKernel;
     public ComputeShader audioShader;
     
     public int initialRays = 1024;
 
     ComputeBuffer sourcesBuffer;
-
     ComputeBuffer pathBuffer;
-    ComputeBuffer countBuffer;
+    ComputeBuffer debugBuffer;
+    
     int maxPaths = 3;
 
-    int traceKernel;
-    
-    
-    ComputeBuffer debugBuffer;
+   
 
-
+    readonly List<int> removalBuffer = new List<int>();
 
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
@@ -70,13 +69,8 @@ public class AudioManager : MonoBehaviour
         listener.InitializeRays(initialRays);
 
         audioSources = new Dictionary<int, AcousticSource>();
-        //find all audio sources in the scene
-        var audioSourcesArray = FindObjectsByType<AcousticSource>(FindObjectsSortMode.InstanceID);
-        foreach (var audioSource in audioSourcesArray)
-        {
-            audioSources.Add(audioSource.gameObject.GetInstanceID(), audioSource);
-        }
-
+        delayedAudioSources = new Dictionary<int, AcousticSource>();
+        
         traceKernel = audioShader.FindKernel("TraceRays");
         
         // successful paths data
@@ -85,7 +79,7 @@ public class AudioManager : MonoBehaviour
         audioShader.SetBuffer(traceKernel, "pathBuffer", pathBuffer);
 
         //sources buffer
-        sourcesBuffer = new ComputeBuffer(audioSourcesArray.Length < 64 ? audioSourcesArray.Length : 64, Marshal.SizeOf(typeof(SourceData)));
+        sourcesBuffer = new ComputeBuffer(64, Marshal.SizeOf(typeof(SourceData)));
 
         audioShader.SetBuffer(traceKernel, "sources", sourcesBuffer);
         
@@ -98,6 +92,7 @@ public class AudioManager : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
+        // this is not used yet but i refuse to delete it cause we might need it
         List<AcousticSource> sources = audioSources.Values.Select(audioSource =>
         {
             float score = audioSource.GetScore(listenerPos: listener.transform.position);
@@ -111,6 +106,21 @@ public class AudioManager : MonoBehaviour
         .ToList();
 
         SetupSourceBuffer(sources);
+
+        
+        foreach (var delayedAudio in delayedAudioSources.Values)
+        {
+            if (Time.time >= delayedAudio.delayTime)
+            {
+                delayedAudio.audioSource.PlayOneShot(delayedAudio.audioSource.clip, delayedAudio.volume);
+                
+                removalBuffer.Add(delayedAudio.gameObject.GetInstanceID());
+                audioSources.Remove(delayedAudio.gameObject.GetInstanceID());
+            }
+        }
+        
+        //use async rather than getdata
+        AsyncGPUReadback.Request(pathBuffer, OnPathDataReadback);
     }
 
     private void LateUpdate()
@@ -127,29 +137,16 @@ public class AudioManager : MonoBehaviour
 
         audioShader.Dispatch(traceKernel, initialRays / 64, 1, 1);
 
-
-        //debug
-    /*    PathData[] paths = new PathData[3];
-        pathBuffer.GetData(paths);
-
-        for(int i = 0; i < paths.Length; i++)
-        {
-            if (paths[i].distance > 0)
-            {
-                Debug.Log($"Path {i}: Distance={paths[i].distance}, Gain={paths[i].gain}, ArrivalAngles={paths[i].arrivalAngles}, SourceId={paths[i].sourceId}");
-            }
-        }
-        Debug.Log($"Total valid paths: {paths.Count(p => p.distance > 0)}"); */
-
-        //use async rather than getdata
-        AsyncGPUReadback.Request(pathBuffer, OnPathDataReadback);
+        // "garbage collect" delayed sounds
+        CleanDelayedSounds();
     }
+
 
     private void OnDestroy()
     {
         pathBuffer?.Release();
-        countBuffer?.Release();
         sourcesBuffer?.Release();
+        debugBuffer?.Release();
     }
     void OnPathDataReadback(AsyncGPUReadbackRequest request)
     {
@@ -157,8 +154,6 @@ public class AudioManager : MonoBehaviour
 
         var data = request.GetData<PathData>().ToArray();
 
-        // Note: Since this is async, you might want to read the countBuffer 
-        // to know exactly how many elements in 'data' are valid.
         ProcessAudioPaths(data);
     }
 
@@ -169,14 +164,34 @@ public class AudioManager : MonoBehaviour
             if (path.distance <= 0) continue;
 
             float delaySeconds = path.distance / 343.0f;
-            float volume = path.gain;
             float pan = path.arrivalAngles.x; // -1 to 1
             
             // find the source from audioSources and probably do something with it.
-            // audioSources[path.sourceId]
-           
-            
-            // Debug.Log($"playing a sound after {delaySeconds} seconds, volume: {volume}, pan: {pan}");
+            if(audioSources.ContainsKey(path.sourceId))
+            {
+                var source = audioSources[path.sourceId];
+                source.CalculateFinalGain(path.distance);
+                
+                // a sound with a delay > 0.5 will be added on the delayed sources dictionary and it will be triggered after the delay time has passed.
+                if (delaySeconds >= 0.5f)
+                {
+                    float delayTarget = source.timeOfEmission + delaySeconds;
+
+                    // we are accounting for movement changes (does it work correctly though?)
+                    if (!Mathf.Approximately(delayTarget, source.delayTime))
+                    {
+                        source.delayTime = delayTarget;
+                    }
+                    
+                    // avoid duplicate entries
+                    delayedAudioSources.TryAdd(path.sourceId, source);
+                }
+                else
+                {
+                    source.audioSource.PlayOneShot(source.audioSource.clip, source.volume);
+                    audioSources.Remove(path.sourceId);
+                }
+            }
         }
     }
 
@@ -191,5 +206,21 @@ public class AudioManager : MonoBehaviour
             sourcesBuffer.SetData(sourceDataArray);
             audioShader.SetInt("sourceCount", sourceDataArray.Length);
     }
+    
+    //this limits a specific sound to only one instance... for now i suppose
+    public void RegisterAudio(AcousticSource acousticSource)
+    {
+        audioSources.TryAdd(acousticSource.gameObject.GetInstanceID(), acousticSource);
+    }
+
+    private void CleanDelayedSounds()
+    {
+        for (int i = 0; i < removalBuffer.Count; i++)
+        {
+            delayedAudioSources.Remove(removalBuffer[i]);
+        }
+        removalBuffer.Clear();
+    }
+
 }
 
