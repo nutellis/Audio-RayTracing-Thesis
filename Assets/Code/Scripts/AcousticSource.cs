@@ -37,11 +37,8 @@ public class AcousticSource : MonoBehaviour
         float finalDb = (manualDb > 0) ? manualDb : profile.dbLevel;
 
         // Calculate once and store
-        baseAmplitude = 1.0f;
-            
-        //Mathf.Pow(10f, (finalDb) / 20f);
-        
-        //baseAmplitudeWeighted = baseAmplitude * profile.acousticWeight;
+        baseAmplitude = Mathf.Pow(10f, (finalDb - 60f) / 20f);
+        baseAmplitudeWeighted = baseAmplitude * profile.acousticWeight;
         
         audioSource = gameObject.AddComponent<AudioSource>();
         audioSource.clip = audioClip;
@@ -62,10 +59,17 @@ public class AcousticSource : MonoBehaviour
         audioSource.volume = finalGain;
     }
 
+    private float DistanceAttenuation(float distance, float referenceDistance, float falloffFactor)
+    {
+        distance = Mathf.Max(distance, referenceDistance);
+        float gain = referenceDistance / (referenceDistance + falloffFactor * (distance - referenceDistance));
+        return gain;
+    }
+
     public void CalculateFinalGain(float distance)
     {
-        finalGain = baseAmplitude / Mathf.Pow(distance, 1.3f); // 1 / distance ^ 2
-        volume = finalGain * profile.acousticWeight;
+        finalGain = baseAmplitude * 1f / (1f + distance);// * DistanceAttenuation(distance, 1f, 1f);
+        volume = finalGain;
     }
 
     public void RegisterSound()
