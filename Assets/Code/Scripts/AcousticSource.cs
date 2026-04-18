@@ -37,12 +37,16 @@ public class AcousticSource : MonoBehaviour
         float finalDb = (manualDb > 0) ? manualDb : profile.dbLevel;
 
         // Calculate once and store
-        baseAmplitude = Mathf.Pow(10f, (finalDb - 120f) / 20f);
-        baseAmplitudeWeighted = baseAmplitude * profile.acousticWeight;
+        baseAmplitude = 1.0f;
+            
+        //Mathf.Pow(10f, (finalDb) / 20f);
+        
+        //baseAmplitudeWeighted = baseAmplitude * profile.acousticWeight;
         
         audioSource = gameObject.AddComponent<AudioSource>();
         audioSource.clip = audioClip;
         audioSource.volume = volume;
+        audioSource.playOnAwake = false;
         
     }
 
@@ -60,8 +64,8 @@ public class AcousticSource : MonoBehaviour
 
     public void CalculateFinalGain(float distance)
     {
-        finalGain = 1.0f;// baseAmplitude / distance;
-        volume = finalGain;
+        finalGain = baseAmplitude / Mathf.Pow(distance, 1.3f); // 1 / distance ^ 2
+        volume = finalGain * profile.acousticWeight;
     }
 
     public void RegisterSound()

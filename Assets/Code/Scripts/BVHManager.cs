@@ -1,45 +1,20 @@
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Code.Data;
 using UnityEngine;
 
 public class BVHManager : MonoBehaviour
 {
-    public struct PrimitiveInfo
-    {
-        public int primitiveIndex;
-        public Bounds bounds;
-
-        public PrimitiveInfo(int primitiveIndex, Bounds bounds)
-        {
-            this.primitiveIndex = primitiveIndex;
-            this.bounds = bounds;
-        }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct GPUNode
-    {
-        public Vector3 aabbMin;
-        public Vector3 aabbMax;
-        public int primitiveIndex;
-
-        public int leftChild;
-        public int rightChild;
-
-        public int parent;
-
-        public int objectID;
-        
-        float padding;
-    }
-
     List<int> primitiveIds;
     List<Vector3> primitiveCentroids;
     List<Bounds> primitiveBounds;
 
     Bounds sceneBounds;
+    
+    Dictionary<int, GPUBlas> blas; // holds a unique record of each blas created
 
     public ComputeShader bvhGeneratorShader;
+    
     //bvh tree related kernels
     int generateMortonCodeKernel;
     int histogramPassKernel;
@@ -91,6 +66,7 @@ public class BVHManager : MonoBehaviour
         InitializeBVHBuffer();
         InitializeRefitBuffers();
 
+        UpdateBounds();
         MortonGenerationBuffersSetup();
         RadixSort();
 
@@ -123,14 +99,21 @@ public class BVHManager : MonoBehaviour
         deltas?.Release();
     }
 
-    private void LateUpdate()
+    public void RegisterBLAS(MeshFilter meshFilter)
     {
-        // CollectBounds(); // this is a bottleneck. We need  to update it only if something changes. For now it will be called once on start.
-       
+        //meshFilter.mesh.tr
     }
-
+    void UpdateBounds()
+    {
+        bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "centroidsBuffer", centroidsBuffer);
+        bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "mortonCodesBuffer", mortonCodesBuffer);
+        bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "primitiveIndicesBuffer", primitiveIndicesBuffer);
+    }
+    
     public void UpdateBVH()
     {
+        CollectBounds();
+        UpdateBounds();
         MortonGenerationBuffersSetup();
         RadixSort();
         BuildTree();
@@ -140,11 +123,10 @@ public class BVHManager : MonoBehaviour
     void CollectBounds()
     {
         // get all objects with a collider
-        Collider[] colliders = FindObjectsByType<Collider>(FindObjectsSortMode.InstanceID);
+        Renderer[] colliders = FindObjectsByType<Renderer>(FindObjectsSortMode.InstanceID);
 
         if (colliders.Length == 0)
         {
-            Debug.LogWarning("No colliders found in the scene.");
             return;
         }
         objectCount = colliders.Length;
@@ -155,7 +137,7 @@ public class BVHManager : MonoBehaviour
         primitiveBounds.Clear();
         sceneBounds = colliders[0].bounds;
 
-        foreach (Collider collider in colliders)
+        foreach (Renderer collider in colliders)
         {
             if (collider.enabled)
             {
@@ -163,7 +145,6 @@ public class BVHManager : MonoBehaviour
                 primitiveIds.Add(collider.gameObject.GetInstanceID());
 
                 primitiveBounds.Add(collider.bounds);
-
 
                 //get scene bounds
                 sceneBounds.Encapsulate(collider.bounds);
@@ -177,10 +158,6 @@ public class BVHManager : MonoBehaviour
         mortonCodesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
         primitiveIndicesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
         primitiveObjectIds = new ComputeBuffer(objectCount, sizeof(int));
-
-        bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "centroidsBuffer", centroidsBuffer);
-        bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "mortonCodesBuffer", mortonCodesBuffer);
-        bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "primitiveIndicesBuffer", primitiveIndicesBuffer);
 
         outMortonBuffer = new ComputeBuffer(objectCount, sizeof(uint));
         outIndicesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
@@ -236,13 +213,9 @@ public class BVHManager : MonoBehaviour
             bvhGeneratorShader.Dispatch(scatterPassKernel, groups, 1, 1);
 
             // swap old with new ordered buffer.
-            ComputeBuffer tempM = mortonCodesBuffer;
-            mortonCodesBuffer = outMortonBuffer;
-            outMortonBuffer = tempM;
+            (mortonCodesBuffer, outMortonBuffer) = (outMortonBuffer, mortonCodesBuffer);
 
-            ComputeBuffer tempI = primitiveIndicesBuffer;
-            primitiveIndicesBuffer = outIndicesBuffer;
-            outIndicesBuffer = tempI;
+            (primitiveIndicesBuffer, outIndicesBuffer) = (outIndicesBuffer, primitiveIndicesBuffer);
         }
     }
 
@@ -304,6 +277,18 @@ public class BVHManager : MonoBehaviour
     void RefitBVH()
     {
         atomicFlagsBuffer.SetData(zeroFlags);
+        
+        // repare leaf data(Min and Max for each renderer)
+        Vector3[] rawBounds = new Vector3[objectCount * 2];
+
+        for (int i = 0; i < objectCount; i++)
+        {
+            rawBounds[i * 2] = primitiveBounds[i].min;
+            rawBounds[i * 2 + 1] = primitiveBounds[i].max;
+        }
+
+        leafBoundsBuffer.SetData(rawBounds);
+        
 
         int groups = Mathf.CeilToInt(objectCount / 64.0f);
         bvhGeneratorShader.SetBuffer(fitKernel, "bvhNodes", bvhNodeBuffer);

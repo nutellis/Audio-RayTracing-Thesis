@@ -224,6 +224,9 @@ struct BVHNode
     int objectId;
     
     float padding;
+    
+    // uint firstPrim;
+    // uint primCount;
 
 };
 RWStructuredBuffer<BVHNode> bvhNodes; // Size: 2N - 1

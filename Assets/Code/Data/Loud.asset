@@ -13,4 +13,4 @@ MonoBehaviour:
   m_Name: Loud
   m_EditorClassIdentifier: Assembly-CSharp::AcousticProfile
   dbLevel: 88
-  acousticWeight: 1
+  acousticWeight: 2
