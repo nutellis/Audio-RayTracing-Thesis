@@ -43,6 +43,7 @@ public class AcousticSource : MonoBehaviour
         audioSource = gameObject.AddComponent<AudioSource>();
         audioSource.clip = audioClip;
         audioSource.volume = volume;
+        audioSource.playOnAwake = false;
         
     }
 

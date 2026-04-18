@@ -13,4 +13,4 @@ MonoBehaviour:
   m_Name: Faint
   m_EditorClassIdentifier: Assembly-CSharp::AcousticProfile
   dbLevel: 20
-  acousticWeight: 1
+  acousticWeight: 0.8

@@ -1,36 +1,9 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using Code.Data;
 using UnityEngine;
 using UnityEngine.Rendering;
-using UnityEngine.Serialization;
-
-[StructLayout(LayoutKind.Sequential)]
-public struct PathData
-{
-    public Vector2 arrivalAngles;
-    public float distance;
-    public float gain;
-    
-    public int sourceId;
-
-    public Vector3 padding;
-}
-public struct SourceData
-{
-    public Vector3 origin;
-    
-    public int sourceId;
-};
-
-
-public struct DebugInfo
-{
-    public int counter;
-    public int counter2;
-
-    public Vector2 padding;
-}
 
 
 public class AudioManager : MonoBehaviour
@@ -138,7 +111,7 @@ public class AudioManager : MonoBehaviour
         audioShader.Dispatch(traceKernel, initialRays / 64, 1, 1);
 
         // "garbage collect" delayed sounds
-        CleanDelayedSounds();
+        CleanSounds();
     }
 
 
@@ -173,7 +146,7 @@ public class AudioManager : MonoBehaviour
                 source.CalculateFinalGain(path.distance);
                 
                 // a sound with a delay > 0.5 will be added on the delayed sources dictionary and it will be triggered after the delay time has passed.
-                if (delaySeconds >= 0.5f)
+                if (delaySeconds >= 0.1f)
                 {
                     float delayTarget = source.timeOfEmission + delaySeconds;
 
@@ -213,13 +186,14 @@ public class AudioManager : MonoBehaviour
         audioSources.TryAdd(acousticSource.gameObject.GetInstanceID(), acousticSource);
     }
 
-    private void CleanDelayedSounds()
+    private void CleanSounds()
     {
         for (int i = 0; i < removalBuffer.Count; i++)
         {
             delayedAudioSources.Remove(removalBuffer[i]);
         }
         removalBuffer.Clear();
+
     }
 
 }

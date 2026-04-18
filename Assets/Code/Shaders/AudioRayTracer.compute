@@ -147,6 +147,24 @@ void InitRays(uint3 id : SV_DispatchThreadID)
     rayBuffer[id.x] = ray;
 }
 
+float RayTriangle()
+{
+        // const float3 edge1 = tri.vertex1 - tri.vertex0;
+        // const float3 edge2 = tri.vertex2 - tri.vertex0;
+        // const float3 h = cross( ray.D, edge2 );
+        // const float a = dot( edge1, h );
+        // if (a > -0.0001f && a < 0.0001f) return; // ray parallel to triangle
+        // const float f = 1 / a;
+        // const float3 s = ray.O - tri.vertex0;
+        // const float u = f * dot( s, h );
+        // if (u < 0 || u > 1) return;
+        // const float3 q = cross( s, edge1 );
+        // const float v = f * dot( ray.D, q );
+        // if (v < 0 || u + v > 1) return;
+        // const float t = f * dot( edge2, q );
+        // if (t > 0.0001f) ray.t = min( ray.t, t );
+}
+
 // Standard Ray-AABB intersection (The Slab Method)
 float RayAABB(float3 rayOrigin, float3 invDir, float3 aabbMin, float3 aabbMax, float tMin, float tMax)
 {
