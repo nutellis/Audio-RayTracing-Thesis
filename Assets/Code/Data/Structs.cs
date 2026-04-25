@@ -53,5 +53,10 @@ namespace Code.Data
     {
         public Vector3 aabbMin;
         public Vector3 aabbMax;
+        
+        public int leftFirst;
+
+        public int triCount;
+
     }
 }

@@ -10,11 +10,11 @@ public class BVHManager : MonoBehaviour
     List<Bounds> primitiveBounds;
 
     Bounds sceneBounds;
-    
-    Dictionary<int, GPUBlas> blas; // holds a unique record of each blas created
+
+    // Dictionary<int, GPUBlas> blas; // holds a unique record of each blas created
 
     public ComputeShader bvhGeneratorShader;
-    
+
     //bvh tree related kernels
     int generateMortonCodeKernel;
     int histogramPassKernel;
@@ -103,13 +103,14 @@ public class BVHManager : MonoBehaviour
     {
         //meshFilter.mesh.tr
     }
+
     void UpdateBounds()
     {
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "centroidsBuffer", centroidsBuffer);
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "mortonCodesBuffer", mortonCodesBuffer);
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "primitiveIndicesBuffer", primitiveIndicesBuffer);
     }
-    
+
     public void UpdateBVH()
     {
         CollectBounds();
@@ -129,6 +130,7 @@ public class BVHManager : MonoBehaviour
         {
             return;
         }
+
         objectCount = colliders.Length;
 
 
@@ -233,6 +235,7 @@ public class BVHManager : MonoBehaviour
             clearNodes[i].rightChild = -1;
             clearNodes[i].primitiveIndex = -1;
         }
+
         bvhNodeBuffer.SetData(clearNodes);
 
         deltas = new ComputeBuffer((objectCount * 2) - 1, sizeof(int) * 4);
@@ -263,7 +266,7 @@ public class BVHManager : MonoBehaviour
         zeroFlags = new int[objectCount - 1];
 
         // repare leaf data(Min and Max for each renderer)
-            Vector3[] rawBounds = new Vector3[objectCount * 2];
+        Vector3[] rawBounds = new Vector3[objectCount * 2];
 
         for (int i = 0; i < objectCount; i++)
         {
@@ -277,7 +280,7 @@ public class BVHManager : MonoBehaviour
     void RefitBVH()
     {
         atomicFlagsBuffer.SetData(zeroFlags);
-        
+
         // repare leaf data(Min and Max for each renderer)
         Vector3[] rawBounds = new Vector3[objectCount * 2];
 
@@ -288,7 +291,7 @@ public class BVHManager : MonoBehaviour
         }
 
         leafBoundsBuffer.SetData(rawBounds);
-        
+
 
         int groups = Mathf.CeilToInt(objectCount / 64.0f);
         bvhGeneratorShader.SetBuffer(fitKernel, "bvhNodes", bvhNodeBuffer);
@@ -300,30 +303,31 @@ public class BVHManager : MonoBehaviour
     public int debugDepth = 5;
 
 #if UNITY_EDITOR
-    void OnDrawGizmos()
-    {
-        if (bvhNodeBuffer == null || objectCount == 0) return;
+    // void OnDrawGizmos()
+    // {
+    //     if (bvhNodeBuffer == null || objectCount == 0) return;
+    //
+    //     GPUNode[] nodes = new GPUNode[objectCount * 2 - 1];
+    //     bvhNodeBuffer.GetData(nodes);
+    //     //for (int i = 0; i < nodes.Length; i++)
+    //     //    Debug.Log($"Node {i}: min={nodes[i].aabbMin}, max={nodes[i].aabbMax}, primIdx={nodes[i].primitiveIndex}, left={nodes[i].leftChild}, right={nodes[i].rightChild}, parent={nodes[i].parent}");
+    //
+    //     // Recursive draw call
+    //     DrawNode(nodes, 0, 0); // Start at root (index 0)
+    // }
 
-        GPUNode[] nodes = new GPUNode[objectCount * 2 - 1];
-        bvhNodeBuffer.GetData(nodes);
-        //for (int i = 0; i < nodes.Length; i++)
-        //    Debug.Log($"Node {i}: min={nodes[i].aabbMin}, max={nodes[i].aabbMax}, primIdx={nodes[i].primitiveIndex}, left={nodes[i].leftChild}, right={nodes[i].rightChild}, parent={nodes[i].parent}");
-
-        // Recursive draw call
-        DrawNode(nodes, 0, 0); // Start at root (index 0)
-    }
     // Define a set of distinct colors for levels 0-10+
     private readonly Color[] levelColors = new Color[]
     {
-        Color.green,       // Level 0 (Root)
-        Color.cyan,        // Level 1
-        Color.yellow,      // Level 2
-        Color.magenta,     // Level 3
+        Color.green, // Level 0 (Root)
+        Color.cyan, // Level 1
+        Color.yellow, // Level 2
+        Color.magenta, // Level 3
         new Color(1f, 0.5f, 0f), // Level 4 (Orange)
-        Color.white,       // Level 5
+        Color.white, // Level 5
         new Color(0.5f, 1f, 0.5f), // Level 6
         new Color(0.5f, 0.5f, 1f), // Level 7
-        Color.red          // Level 8+ (Usually Leaves/Deepest)
+        Color.red // Level 8+ (Usually Leaves/Deepest)
     };
 
     void DrawNode(GPUNode[] nodes, int nodeIdx, int currentDepth)
@@ -352,12 +356,13 @@ public class BVHManager : MonoBehaviour
             DrawNode(nodes, node.leftChild, currentDepth + 1);
             DrawNode(nodes, node.rightChild, currentDepth + 1);
         }
+
         if (node.primitiveIndex != -1)
         {
             int id = node.objectID;
             Vector3 labelPos = center + Vector3.up * 0.05f;
-            
-            string label =  $"ID: {id}";
+
+            string label = $"ID: {id}";
 
             UnityEditor.Handles.Label(labelPos, label);
         }
