@@ -5,11 +5,11 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
+using Unity.Profiling;
 using UnityEngine;
 
 public class AcousticObject : MonoBehaviour
 {
-
     public AcousticMaterial acousticMaterial;
     public int bins = 8;
     private NativeArray<GPUBlas> blas;
@@ -17,27 +17,26 @@ public class AcousticObject : MonoBehaviour
     private NativeArray<float3> centroids;
     private NativeArray<int> triangleIndices;
     private NativeArray<int> nodesUsed;
-    private int rootNodeIdx = 0;
+
+    public GPUBlas[] sortedBlas;
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        //find if the object has a mesh
         var meshfilter = gameObject.GetComponent<MeshFilter>();
 
-        if (meshfilter)
+        if (!meshfilter) return;
+        
+        BVHManager manager = FindAnyObjectByType(typeof(BVHManager)) as BVHManager;
+        if (manager)
         {
-            BuildBlas(meshfilter);
+            manager.RegisterBlas(this);
         }
-        
-        
- 
     }
 
     // Update is called once per frame
     void Update()
     {
-        
     }
 
     private void OnDestroy()
@@ -46,13 +45,14 @@ public class AcousticObject : MonoBehaviour
         if (centroids.IsCreated) centroids.Dispose();
         if (blas.IsCreated) blas.Dispose();
         if (triangleIndices.IsCreated) triangleIndices.Dispose();
+        if (nodesUsed.IsCreated) nodesUsed.Dispose();
     }
 
 //-----------------------------------------------------------------------------------
 // BLAS Funcitons
 //-----------------------------------------------------------------------------------
     [BurstCompile]
-    public struct BuildBlasJob : IJob
+    struct BuildBlasJob : IJob
     {
         public NativeArray<GPUBlas> blas;
         public NativeArray<AcousticObject.Triangle> triangles;
@@ -66,6 +66,7 @@ public class AcousticObject : MonoBehaviour
         
         public void Execute()
         {
+            GetTriangles();
             GPUBlas rootNode = blas[0];
             
             rootNode.leftFirst = 0;
@@ -84,16 +85,8 @@ public class AcousticObject : MonoBehaviour
             cache.Dispose();
         }
         
-        NativeArray<Triangle> GetTriangles()
+        void GetTriangles()
         {
-            // int triangleCount = 0;
-            // for(int i = 0; i < mesh.subMeshCount; i++)
-            // {
-            //     //we assume topology of triangles
-            //     triangleCount += mesh.GetSubMesh(i).indexCount / 3;
-            // }
-            //
-
             var vertexData = new NativeArray<float3>(mesh.vertexCount, Allocator.Temp);
             mesh.GetVertices(vertexData.Reinterpret<Vector3>());
             
@@ -122,8 +115,6 @@ public class AcousticObject : MonoBehaviour
                 }
             }
             vertexData.Dispose();
-                
-            return triangles;
         }
         
         void ProcessTriangle(int i, int i0, int i1, int i2, NativeArray<float3> vData)
@@ -208,7 +199,7 @@ public class AcousticObject : MonoBehaviour
                     rightBox.Grow( cache.bins[bins - 1 - i].bounds );
                     cache.rightArea[bins - 2 - i] = rightBox.Area();
                 }
-                // calculate SAH cost for the 7 planes
+                
                 scale = (boundsMax - boundsMin) / bins;
                 for (int i = 0; i < bins - 1; i++)
                 {
@@ -227,7 +218,7 @@ public class AcousticObject : MonoBehaviour
 
         float CalculateNodeCost( ref GPUBlas node )
         {
-            float3 e = node.aabbMax - node.aabbMin; // extent of the node
+            float3 e = node.aabbMax - node.aabbMin;
             float surfaceArea = e.x * e.y + e.y * e.z + e.z * e.x;
             return node.triCount * surfaceArea;
         }
@@ -240,7 +231,9 @@ public class AcousticObject : MonoBehaviour
             float splitPos = 0;
             float splitCost = FindBestSplitPlane( ref node, ref axis, ref splitPos, ref cache);
             float nosplitCost = CalculateNodeCost( ref node );
+            
             if (splitCost >= nosplitCost) return;
+            
             // in-place partition
             int i = blas[nodeIdx].leftFirst;
             int j = i + blas[nodeIdx].triCount - 1;
@@ -254,9 +247,11 @@ public class AcousticObject : MonoBehaviour
                     j--;
                 }
             }
+            
             // abort split if one of the sides is empty
             int leftCount = i - blas[nodeIdx].leftFirst;
             if (leftCount == 0 || leftCount == blas[nodeIdx].triCount) return;
+            
             // create child nodes
             int leftChildIdx = nodesUsed[0]++;
             int rightChildIdx = nodesUsed[0]++;
@@ -348,52 +343,69 @@ public class AcousticObject : MonoBehaviour
         }
     }
 
-    
+    static readonly ProfilerMarker bvhBuildMarker = new ProfilerMarker("Acoustic.BuildBLAS");
+    static readonly ProfilerMarker dataPrepMarker = new ProfilerMarker("Acoustic.DataPrep");
     public void BuildBlas(MeshFilter meshFilter)
     {
-        int triangleCount = meshFilter.sharedMesh.triangles.Length;
-        
-        triangles = new NativeArray<Triangle>(triangleCount, Allocator.Persistent);
-        centroids = new NativeArray<float3>(triangleCount, Allocator.Persistent);
-        triangleIndices = new NativeArray<int>(triangleCount, Allocator.Persistent);
-        for (int i = 0; i < triangleCount; i++) triangleIndices[i] = i;
-
-        blas = new NativeArray<GPUBlas>(triangleCount * 2 - 1, Allocator.Persistent);
-        NativeArray<int> tempNodesUsed = new NativeArray<int>(1, Allocator.TempJob);
-        var meshDataArray = Mesh.AcquireReadOnlyMeshData(meshFilter.sharedMesh);
-        var job = new BuildBlasJob
+        using (bvhBuildMarker.Auto())
         {
-            triangles = triangles,
-            centroids = centroids,
-            triangleIndices = triangleIndices,
-            blas = blas,
-            nodesUsed = tempNodesUsed,
-            bins = this.bins,
-            mesh = meshDataArray[0]
-        };
+            var sharedMesh = meshFilter.sharedMesh;
+            int totalIndices = 0;
+            int subMeshCount = sharedMesh.subMeshCount;
+            for (int i = 0; i < subMeshCount; i++)
+            {
+                totalIndices += (int)sharedMesh.GetIndexCount(i);
+            }
+            int triangleCount = totalIndices / 3;
+
+            triangles = new NativeArray<Triangle>(triangleCount, Allocator.Persistent);
+            centroids = new NativeArray<float3>(triangleCount, Allocator.Persistent);
+            triangleIndices = new NativeArray<int>(triangleCount, Allocator.Persistent);
+            for (int i = 0; i < triangleCount; i++) triangleIndices[i] = i;
+
+            blas = new NativeArray<GPUBlas>(triangleCount * 2 - 1, Allocator.Persistent);
+            NativeArray<int> tempNodesUsed = new NativeArray<int>(1, Allocator.TempJob);
+            var meshDataArray = Mesh.AcquireReadOnlyMeshData(sharedMesh);
+            var job = new BuildBlasJob
+            {
+                triangles = triangles,
+                centroids = centroids,
+                triangleIndices = triangleIndices,
+                blas = blas,
+                nodesUsed = tempNodesUsed,
+                bins = this.bins,
+                mesh = meshDataArray[0]
+            };
+
+            JobHandle handle = job.Schedule();
+            handle.Complete();
+
+            meshDataArray.Dispose();
+            tempNodesUsed.Dispose();
+        }
         
-        JobHandle handle = job.Schedule();
-        handle.Complete();
-        
-        meshDataArray.Dispose();
-        int nodes = tempNodesUsed[0];
-        Debug.Log($"BLAS built with {nodes} nodes for {triangles.Length} triangles.");
+        //sort the blas
+
+        sortedBlas = blas.ToArray();
     }
     
+    
+    
+    [Range(0, 32)] public int minDepth = 0;
+    [Range(0, 32)] public int maxDepth = 20;
+    public bool showDebug;
     private void OnDrawGizmosSelected()
     {
-        if (blas == null || blas.Length == 0) return;
+        if (!showDebug) return;
+        if (sortedBlas == null || sortedBlas.Length == 0) return;
         DrawNode(0, 0);
     }
-
-    [Range(0, 32)] public int minDepth = 0;
-    [Range(0, 32)] public int maxDepth = 10;
-
+    
     private void DrawNode(int nodeIdx, int depth)
     {
-        if (depth > maxDepth || nodeIdx >= blas.Length) return;
+        if (depth > maxDepth || nodeIdx >= sortedBlas.Length) return;
 
-        GPUBlas node = blas[nodeIdx];
+        GPUBlas node = sortedBlas[nodeIdx];
         bool isVisible = depth >= minDepth;
 
         if (isVisible)
@@ -403,21 +415,21 @@ public class AcousticObject : MonoBehaviour
 
             float3 center = (node.aabbMin + node.aabbMax) * 0.5f;
             float3 size = node.aabbMax - node.aabbMin;
-           // Gizmos.DrawWireCube(center, size);
+            Gizmos.DrawWireCube(center, size);
 
             // If triCount > 0, this is a leaf node
-            if (node.triCount > 0)
-            {
-                Gizmos.color = Color.yellow;
-                for (int i = 0; i < node.triCount; i++)
-                {
-                    int triIdx = triangleIndices[node.leftFirst + i];
-                    Triangle tri = triangles[triIdx];
-                    Gizmos.DrawLine(tri.vertexA, tri.vertexB);
-                    Gizmos.DrawLine(tri.vertexB, tri.vertexC);
-                    Gizmos.DrawLine(tri.vertexC, tri.vertexA);
-                }
-            }
+            // if (node.triCount > 0)
+            // {
+            //     Gizmos.color = Color.yellow;
+            //     for (int i = 0; i < node.triCount; i++)
+            //     {
+            //         int triIdx = triangleIndices[node.leftFirst + i];
+            //         Triangle tri = triangles[triIdx];
+            //         Gizmos.DrawLine(tri.vertexA, tri.vertexB);
+            //         Gizmos.DrawLine(tri.vertexB, tri.vertexC);
+            //         Gizmos.DrawLine(tri.vertexC, tri.vertexA);
+            //     }
+            // }
         }
 
         // If triCount == 0, this is an inner node. 

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using Code.Data;
 using UnityEngine;
@@ -11,7 +12,7 @@ public class BVHManager : MonoBehaviour
 
     Bounds sceneBounds;
 
-    // Dictionary<int, GPUBlas> blas; // holds a unique record of each blas created
+    Dictionary<string, GPUBlas[]> blasDictionary; // holds a unique record of each blas created
 
     public ComputeShader bvhGeneratorShader;
 
@@ -44,6 +45,8 @@ public class BVHManager : MonoBehaviour
 
 
     int objectCount = 0;
+    
+    public bool showDebug;
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
@@ -51,6 +54,7 @@ public class BVHManager : MonoBehaviour
         primitiveIds = new List<int>();
         primitiveCentroids = new List<Vector3>();
         primitiveBounds = new List<Bounds>();
+        blasDictionary = new Dictionary<string, GPUBlas[]>();
 
         generateMortonCodeKernel = bvhGeneratorShader.FindKernel("GenerateMortonCodes");
         histogramPassKernel = bvhGeneratorShader.FindKernel("LocalHistogramPass");
@@ -74,9 +78,6 @@ public class BVHManager : MonoBehaviour
 
         uint[] mortonDebug = new uint[objectCount];
         mortonCodesBuffer.GetData(mortonDebug);
-
-        //for (int i = 0; i < objectCount; i++)
-        //    Debug.Log(mortonDebug[i]);
     }
 
     private void OnDestroy()
@@ -99,9 +100,22 @@ public class BVHManager : MonoBehaviour
         deltas?.Release();
     }
 
-    public void RegisterBLAS(MeshFilter meshFilter)
+    public void RegisterBlas(AcousticObject obj)
     {
-        //meshFilter.mesh.tr
+        var mesh = obj.GetComponent(typeof(MeshFilter)) as MeshFilter;
+        if (mesh)
+        {
+            var sharedMesh = mesh.sharedMesh;
+            if (blasDictionary.TryGetValue(sharedMesh.name, out GPUBlas[] record) == false)
+            {
+                obj.BuildBlas(mesh);
+                blasDictionary.Add(sharedMesh.name, obj.sortedBlas);
+            }
+            else
+            {
+                obj.sortedBlas = record;
+            }
+        }
     }
 
     void UpdateBounds()
@@ -123,33 +137,41 @@ public class BVHManager : MonoBehaviour
 
     void CollectBounds()
     {
-        // get all objects with a collider
-        Renderer[] colliders = FindObjectsByType<Renderer>(FindObjectsSortMode.InstanceID);
+        // get all relevant objects
+        AcousticObject[] acousticObjects = FindObjectsByType<AcousticObject>(FindObjectsSortMode.InstanceID);
+        AcousticSource[] acousticSources = FindObjectsByType<AcousticSource>(FindObjectsSortMode.InstanceID);
 
-        if (colliders.Length == 0)
+        if (acousticObjects.Length == 0 && acousticSources.Length == 0)
         {
             return;
         }
 
-        objectCount = colliders.Length;
-
+        objectCount = acousticObjects.Length + acousticSources.Length;
 
         primitiveCentroids.Clear();
         primitiveIds.Clear();
         primitiveBounds.Clear();
+        
+        Collider[]  colliders = acousticObjects.Select(obj => obj.GetComponent<Collider>()).Where(col => col)
+            .Concat(acousticSources.Select(src => src.GetComponent<Collider>()).Where(col => col)).ToArray();
+        
         sceneBounds = colliders[0].bounds;
 
-        foreach (Renderer collider in colliders)
+        foreach (Collider col in colliders)
         {
-            if (collider.enabled)
+            if (col.enabled)
             {
-                primitiveCentroids.Add(collider.bounds.center);
-                primitiveIds.Add(collider.gameObject.GetInstanceID());
+                primitiveCentroids.Add(col.bounds.center);
+                primitiveIds.Add(col.gameObject.GetInstanceID());
 
-                primitiveBounds.Add(collider.bounds);
+                primitiveBounds.Add(col.bounds);
 
                 //get scene bounds
-                sceneBounds.Encapsulate(collider.bounds);
+                sceneBounds.Encapsulate(col.bounds);
+            }
+            else
+            {
+                objectCount--;
             }
         }
     }
@@ -303,18 +325,19 @@ public class BVHManager : MonoBehaviour
     public int debugDepth = 5;
 
 #if UNITY_EDITOR
-    // void OnDrawGizmos()
-    // {
-    //     if (bvhNodeBuffer == null || objectCount == 0) return;
-    //
-    //     GPUNode[] nodes = new GPUNode[objectCount * 2 - 1];
-    //     bvhNodeBuffer.GetData(nodes);
-    //     //for (int i = 0; i < nodes.Length; i++)
-    //     //    Debug.Log($"Node {i}: min={nodes[i].aabbMin}, max={nodes[i].aabbMax}, primIdx={nodes[i].primitiveIndex}, left={nodes[i].leftChild}, right={nodes[i].rightChild}, parent={nodes[i].parent}");
-    //
-    //     // Recursive draw call
-    //     DrawNode(nodes, 0, 0); // Start at root (index 0)
-    // }
+    void OnDrawGizmos()
+    {
+        if (!showDebug) return;
+        if (bvhNodeBuffer == null || objectCount == 0) return;
+    
+        GPUNode[] nodes = new GPUNode[objectCount * 2 - 1];
+        bvhNodeBuffer.GetData(nodes);
+        //for (int i = 0; i < nodes.Length; i++)
+        //    Debug.Log($"Node {i}: min={nodes[i].aabbMin}, max={nodes[i].aabbMax}, primIdx={nodes[i].primitiveIndex}, left={nodes[i].leftChild}, right={nodes[i].rightChild}, parent={nodes[i].parent}");
+    
+        // Recursive draw call
+        DrawNode(nodes, 0, 0); // Start at root (index 0)
+    }
 
     // Define a set of distinct colors for levels 0-10+
     private readonly Color[] levelColors = new Color[]
