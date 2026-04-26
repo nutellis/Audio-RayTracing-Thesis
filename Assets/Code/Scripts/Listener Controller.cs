@@ -2,7 +2,7 @@ using System;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
-public class ListenerController : MonoBehaviour
+public class ListenerController : AcousticBase
 {
 
     public ComputeShader audioShader;
@@ -12,6 +12,13 @@ public class ListenerController : MonoBehaviour
     int traceKernel;
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
+
+    protected override void Awake()
+    {
+        base.Awake();
+
+    }
+    
     void Start()
     {
        
@@ -21,6 +28,7 @@ public class ListenerController : MonoBehaviour
     // Update is called once per frame
     void Update()
     {
+
        // UpdateShaderData();
 
        // int groups = Mathf.CeilToInt(maxRays / 64f);

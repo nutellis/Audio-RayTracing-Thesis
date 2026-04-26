@@ -11,9 +11,8 @@ public class BVHManager : MonoBehaviour
     List<Bounds> primitiveBounds;
 
     Bounds sceneBounds;
-
-    Dictionary<string, GPUBlas[]> blasDictionary; // holds a unique record of each blas created
-
+    
+    
     public ComputeShader bvhGeneratorShader;
 
     //bvh tree related kernels
@@ -54,7 +53,6 @@ public class BVHManager : MonoBehaviour
         primitiveIds = new List<int>();
         primitiveCentroids = new List<Vector3>();
         primitiveBounds = new List<Bounds>();
-        blasDictionary = new Dictionary<string, GPUBlas[]>();
 
         generateMortonCodeKernel = bvhGeneratorShader.FindKernel("GenerateMortonCodes");
         histogramPassKernel = bvhGeneratorShader.FindKernel("LocalHistogramPass");
@@ -99,25 +97,7 @@ public class BVHManager : MonoBehaviour
 
         deltas?.Release();
     }
-
-    public void RegisterBlas(AcousticObject obj)
-    {
-        var mesh = obj.GetComponent(typeof(MeshFilter)) as MeshFilter;
-        if (mesh)
-        {
-            var sharedMesh = mesh.sharedMesh;
-            if (blasDictionary.TryGetValue(sharedMesh.name, out GPUBlas[] record) == false)
-            {
-                obj.BuildBlas(mesh);
-                blasDictionary.Add(sharedMesh.name, obj.sortedBlas);
-            }
-            else
-            {
-                obj.sortedBlas = record;
-            }
-        }
-    }
-
+    
     void UpdateBounds()
     {
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "centroidsBuffer", centroidsBuffer);
@@ -137,42 +117,25 @@ public class BVHManager : MonoBehaviour
 
     void CollectBounds()
     {
-        // get all relevant objects
-        AcousticObject[] acousticObjects = FindObjectsByType<AcousticObject>(FindObjectsSortMode.InstanceID);
-        AcousticSource[] acousticSources = FindObjectsByType<AcousticSource>(FindObjectsSortMode.InstanceID);
-
-        if (acousticObjects.Length == 0 && acousticSources.Length == 0)
-        {
-            return;
-        }
-
-        objectCount = acousticObjects.Length + acousticSources.Length;
-
         primitiveCentroids.Clear();
         primitiveIds.Clear();
         primitiveBounds.Clear();
         
-        Collider[]  colliders = acousticObjects.Select(obj => obj.GetComponent<Collider>()).Where(col => col)
-            .Concat(acousticSources.Select(src => src.GetComponent<Collider>()).Where(col => col)).ToArray();
+        var allObjects = ObjectRegistry<AcousticBase>.Instance.GetValues();
+        objectCount = allObjects.Length;
         
-        sceneBounds = colliders[0].bounds;
+        sceneBounds = allObjects[0].collider.bounds;
 
-        foreach (Collider col in colliders)
+        foreach (AcousticBase obj in allObjects)
         {
-            if (col.enabled)
-            {
-                primitiveCentroids.Add(col.bounds.center);
-                primitiveIds.Add(col.gameObject.GetInstanceID());
+            primitiveCentroids.Add(obj.collider.bounds.center);
+            primitiveIds.Add(obj.InstanceID);
 
-                primitiveBounds.Add(col.bounds);
+            primitiveBounds.Add(obj.collider.bounds);
 
-                //get scene bounds
-                sceneBounds.Encapsulate(col.bounds);
-            }
-            else
-            {
-                objectCount--;
-            }
+            //get scene bounds
+            sceneBounds.Encapsulate(obj.collider.bounds);
+        
         }
     }
 

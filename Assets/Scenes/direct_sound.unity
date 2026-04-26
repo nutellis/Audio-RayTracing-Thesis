@@ -708,10 +708,7 @@ PrefabInstance:
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
-    m_AddedComponents:
-    - targetCorrespondingSourceObject: {fileID: 440150976313761185, guid: 12a4618e2c299d94b9e5f1b1eaafabb4, type: 3}
-      insertIndex: -1
-      addedObject: {fileID: 916713071}
+    m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 12a4618e2c299d94b9e5f1b1eaafabb4, type: 3}
 --- !u!1 &567485268 stripped
 GameObject:
@@ -730,6 +727,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 927c418e39bfb1b4a9371675415044f6, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::AcousticObject
+  bounds:
+    m_Center: {x: 0, y: 0, z: 0}
+    m_Extent: {x: 0, y: 0, z: 0}
   acousticMaterial: {fileID: 0}
   bins: 8
   minDepth: 0
@@ -743,6 +743,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
+    - target: {fileID: 1503477956819537481, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
+      propertyPath: showDebug
+      value: 1
+      objectReference: {fileID: 0}
     - target: {fileID: 3060385910918843040, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_Size.x
       value: 2.112036
@@ -804,20 +808,32 @@ PrefabInstance:
       value: AcousticObjectPrefab (3)
       objectReference: {fileID: 0}
     - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
+      propertyPath: m_LocalScale.x
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
+      propertyPath: m_LocalScale.y
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
+      propertyPath: m_LocalScale.z
+      value: 1
+      objectReference: {fileID: 0}
+    - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_LocalPosition.x
-      value: -4.265463
+      value: -4.5941663
       objectReference: {fileID: 0}
     - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_LocalPosition.y
-      value: 0.49999985
+      value: 0.49784696
       objectReference: {fileID: 0}
     - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_LocalPosition.z
-      value: -6.399719
+      value: -6.120967
       objectReference: {fileID: 0}
     - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_LocalRotation.w
-      value: 1
+      value: 0.9238797
       objectReference: {fileID: 0}
     - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_LocalRotation.x
@@ -829,7 +845,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_LocalRotation.z
-      value: -0
+      value: -0.38268322
       objectReference: {fileID: 0}
     - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_LocalEulerAnglesHint.x
@@ -841,7 +857,7 @@ PrefabInstance:
       objectReference: {fileID: 0}
     - target: {fileID: 6061499772594980108, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_LocalEulerAnglesHint.z
-      value: 0
+      value: -45
       objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
@@ -981,28 +997,6 @@ CanvasRenderer:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 647227716}
   m_CullTransparentMesh: 1
---- !u!1 &916713065 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 440150976313761185, guid: 12a4618e2c299d94b9e5f1b1eaafabb4, type: 3}
-  m_PrefabInstance: {fileID: 458020845}
-  m_PrefabAsset: {fileID: 0}
---- !u!114 &916713071
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 916713065}
-  m_Enabled: 1
-  m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 927c418e39bfb1b4a9371675415044f6, type: 3}
-  m_Name: 
-  m_EditorClassIdentifier: Assembly-CSharp::AcousticObject
-  acousticMaterial: {fileID: 0}
-  bins: 8
-  minDepth: 0
-  maxDepth: 20
-  showDebug: 0
 --- !u!1001 &998951492
 PrefabInstance:
   m_ObjectHideFlags: 0
@@ -1811,6 +1805,10 @@ PrefabInstance:
     serializedVersion: 3
     m_TransformParent: {fileID: 0}
     m_Modifications:
+    - target: {fileID: 1503477956819537481, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
+      propertyPath: showDebug
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 3060385910918843040, guid: fe38f37e56244734fa4e9ac603357eac, type: 3}
       propertyPath: m_Size.x
       value: 2.112036

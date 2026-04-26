@@ -2,7 +2,7 @@ using System;
 using UnityEngine;
 using UnityEngine.Serialization;
 
-public class AcousticSource : MonoBehaviour
+public class AcousticSource : AcousticBase
 {
     public AudioClip audioClip;
     public AudioSource audioSource;
@@ -12,7 +12,6 @@ public class AcousticSource : MonoBehaviour
     [Tooltip("Can be used to fine-tune the profile.\nCaution if the values are far from the profile you are effectively overriding the profile\nDefault is 0")]
     public float manualDb = 0f;
     
-
     float sortingGain;
 
     private float baseAmplitude;
@@ -30,7 +29,12 @@ public class AcousticSource : MonoBehaviour
     {
         return sortingGain;
     }
-    
+
+    protected override void Awake()
+    {
+        base.Awake();
+    }
+
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {

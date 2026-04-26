@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using Code.Data;
 using Unity.Burst;
 using Unity.Collections;
@@ -8,7 +7,7 @@ using Unity.Mathematics;
 using Unity.Profiling;
 using UnityEngine;
 
-public class AcousticObject : MonoBehaviour
+public class AcousticObject : AcousticBase
 {
     public AcousticMaterial acousticMaterial;
     public int bins = 8;
@@ -18,25 +17,43 @@ public class AcousticObject : MonoBehaviour
     private NativeArray<int> triangleIndices;
     private NativeArray<int> nodesUsed;
 
-    public GPUBlas[] sortedBlas;
+    public GPUBlas[] blasArray;
+
+    protected override void Awake()
+    {
+        base.Awake();
+        var meshFilter = gameObject.GetComponent<MeshFilter>();
+
+        if (!meshFilter) return;
+        
+       var key = meshFilter.sharedMesh.name.GetHashCode();
+ 
+       GPUBlas[] existingBlas = ObjectRegistry<GPUBlas[]>.Instance.GetObject(key);
+        if (existingBlas != null)
+        {
+            Debug.LogWarning($"BLAS for object {name} already exists in registry.");
+            blasArray = existingBlas;
+        }
+        else
+        {
+            BuildBlas(meshFilter);
+            ObjectRegistry<GPUBlas[]>.Instance.RegisterObject(key, blasArray);
+            
+            Debug.LogWarning($"BLAS for object {name} added in registry.");
+        }
+
+    }
+
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
-    {
-        var meshfilter = gameObject.GetComponent<MeshFilter>();
-
-        if (!meshfilter) return;
-        
-        BVHManager manager = FindAnyObjectByType(typeof(BVHManager)) as BVHManager;
-        if (manager)
-        {
-            manager.RegisterBlas(this);
-        }
+    { 
     }
 
     // Update is called once per frame
     void Update()
     {
+
     }
 
     private void OnDestroy()
@@ -386,7 +403,7 @@ public class AcousticObject : MonoBehaviour
         
         //sort the blas
 
-        sortedBlas = blas.ToArray();
+        blasArray = blas.ToArray();
     }
     
     
@@ -397,15 +414,15 @@ public class AcousticObject : MonoBehaviour
     private void OnDrawGizmosSelected()
     {
         if (!showDebug) return;
-        if (sortedBlas == null || sortedBlas.Length == 0) return;
+        if (blasArray == null || blasArray.Length == 0) return;
         DrawNode(0, 0);
     }
     
     private void DrawNode(int nodeIdx, int depth)
     {
-        if (depth > maxDepth || nodeIdx >= sortedBlas.Length) return;
+        if (depth > maxDepth || nodeIdx >= blasArray.Length) return;
 
-        GPUBlas node = sortedBlas[nodeIdx];
+        GPUBlas node = blasArray[nodeIdx];
         bool isVisible = depth >= minDepth;
 
         if (isVisible)
@@ -441,4 +458,5 @@ public class AcousticObject : MonoBehaviour
             DrawNode(node.leftFirst + 1, depth + 1);
         }
     }
+
 }
