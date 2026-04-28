@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Code.Data;
 using Unity.Burst;
 using Unity.Collections;
@@ -31,31 +32,26 @@ public class AcousticObject : AcousticBase
        GPUBlas[] existingBlas = ObjectRegistry<GPUBlas[]>.Instance.GetObject(key);
         if (existingBlas != null)
         {
-            Debug.LogWarning($"BLAS for object {name} already exists in registry.");
+            // Debug.LogWarning($"BLAS for object {name} already exists in registry.");
             blasArray = existingBlas;
         }
         else
         {
             BuildBlas(meshFilter);
-            ObjectRegistry<GPUBlas[]>.Instance.RegisterObject(key, blasArray);
             
-            Debug.LogWarning($"BLAS for object {name} added in registry.");
+            ObjectData objectData = new ObjectData
+            {
+                blasData = blasArray,
+                triangles = triangles.ToArray()
+            };
+            
+            ObjectRegistry<ObjectData>.Instance.RegisterObject(key, objectData);
+            
+            //Debug.LogWarning($"BLAS for object {name} added in registry.");
         }
 
     }
-
-
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
-    void Start()
-    { 
-    }
-
-    // Update is called once per frame
-    void Update()
-    {
-
-    }
-
+    
     private void OnDestroy()
     {
         if (triangles.IsCreated) triangles.Dispose();
@@ -68,11 +64,56 @@ public class AcousticObject : AcousticBase
 //-----------------------------------------------------------------------------------
 // BLAS Funcitons
 //-----------------------------------------------------------------------------------
+    
+    static readonly ProfilerMarker bvhBuildMarker = new ProfilerMarker("Acoustic.BuildBLAS");
+    public void BuildBlas(MeshFilter meshFilter)
+    {
+        using (bvhBuildMarker.Auto())
+        {
+            var sharedMesh = meshFilter.sharedMesh;
+            int totalIndices = 0;
+            int subMeshCount = sharedMesh.subMeshCount;
+            for (int i = 0; i < subMeshCount; i++)
+            {
+                totalIndices += (int)sharedMesh.GetIndexCount(i);
+            }
+            int triangleCount = totalIndices / 3;
+
+            triangles = new NativeArray<Triangle>(triangleCount, Allocator.Persistent);
+            centroids = new NativeArray<float3>(triangleCount, Allocator.Persistent);
+            triangleIndices = new NativeArray<int>(triangleCount, Allocator.Persistent);
+            for (int i = 0; i < triangleCount; i++) triangleIndices[i] = i;
+
+            blas = new NativeArray<GPUBlas>(triangleCount * 2 - 1, Allocator.Persistent);
+            NativeArray<int> tempNodesUsed = new NativeArray<int>(1, Allocator.TempJob);
+            var meshDataArray = Mesh.AcquireReadOnlyMeshData(sharedMesh);
+            var job = new BuildBlasJob
+            {
+                triangles = triangles,
+                centroids = centroids,
+                triangleIndices = triangleIndices,
+                blas = blas,
+                nodesUsed = tempNodesUsed,
+                bins = this.bins,
+                mesh = meshDataArray[0]
+            };
+
+            JobHandle handle = job.Schedule();
+            handle.Complete();
+
+            meshDataArray.Dispose();
+            tempNodesUsed.Dispose();
+        }
+        
+        blasArray = blas.ToArray();
+    }
+    
+    
     [BurstCompile]
     struct BuildBlasJob : IJob
     {
         public NativeArray<GPUBlas> blas;
-        public NativeArray<AcousticObject.Triangle> triangles;
+        public NativeArray<Triangle> triangles;
         public NativeArray<float3> centroids;
         public NativeArray<int> triangleIndices;
         
@@ -99,6 +140,16 @@ public class AcousticObject : AcousticBase
             UpdateBlasBounds(0);
             SubdivideBlas(0, ref cache);
             
+            var sortedTriangles = new NativeArray<Triangle>(triangles.Length, Allocator.Temp);
+
+            for (int i = 0; i < triangleIndices.Length; i++)
+            {
+                sortedTriangles[i] = triangles[triangleIndices[i]];
+            }
+
+            triangles.CopyFrom(sortedTriangles);
+
+            sortedTriangles.Dispose();
             cache.Dispose();
         }
         
@@ -139,7 +190,7 @@ public class AcousticObject : AcousticBase
             float3 v0 = vData[i0];
             float3 v1 = vData[i1];
             float3 v2 = vData[i2];
-            triangles[i] = new Triangle { vertexA = v0, vertexB = v1, vertexC = v2 };
+            triangles[i] = new Triangle { vertexA = v0, vertexB = v1, vertexC = v2, padding = float3.zero };
             centroids[i] = (v0 + v1 + v2) * 0.333333f;
         }
 
@@ -240,7 +291,6 @@ public class AcousticObject : AcousticBase
             return node.triCount * surfaceArea;
         }
 
-
         void SubdivideBlas(int nodeIdx, ref BlasBuildCache cache)
         {
             GPUBlas node = blas[nodeIdx];
@@ -298,14 +348,6 @@ public class AcousticObject : AcousticBase
         }
     };
     
-    
-    public struct Triangle
-    {
-        public float3 vertexA;
-        public float3 vertexB;
-        public float3 vertexC;
-    }
-    
     struct aabb
     {
         public static aabb Empty()
@@ -359,54 +401,6 @@ public class AcousticObject : AcousticBase
             rightCount.Dispose();
         }
     }
-
-    static readonly ProfilerMarker bvhBuildMarker = new ProfilerMarker("Acoustic.BuildBLAS");
-    static readonly ProfilerMarker dataPrepMarker = new ProfilerMarker("Acoustic.DataPrep");
-    public void BuildBlas(MeshFilter meshFilter)
-    {
-        using (bvhBuildMarker.Auto())
-        {
-            var sharedMesh = meshFilter.sharedMesh;
-            int totalIndices = 0;
-            int subMeshCount = sharedMesh.subMeshCount;
-            for (int i = 0; i < subMeshCount; i++)
-            {
-                totalIndices += (int)sharedMesh.GetIndexCount(i);
-            }
-            int triangleCount = totalIndices / 3;
-
-            triangles = new NativeArray<Triangle>(triangleCount, Allocator.Persistent);
-            centroids = new NativeArray<float3>(triangleCount, Allocator.Persistent);
-            triangleIndices = new NativeArray<int>(triangleCount, Allocator.Persistent);
-            for (int i = 0; i < triangleCount; i++) triangleIndices[i] = i;
-
-            blas = new NativeArray<GPUBlas>(triangleCount * 2 - 1, Allocator.Persistent);
-            NativeArray<int> tempNodesUsed = new NativeArray<int>(1, Allocator.TempJob);
-            var meshDataArray = Mesh.AcquireReadOnlyMeshData(sharedMesh);
-            var job = new BuildBlasJob
-            {
-                triangles = triangles,
-                centroids = centroids,
-                triangleIndices = triangleIndices,
-                blas = blas,
-                nodesUsed = tempNodesUsed,
-                bins = this.bins,
-                mesh = meshDataArray[0]
-            };
-
-            JobHandle handle = job.Schedule();
-            handle.Complete();
-
-            meshDataArray.Dispose();
-            tempNodesUsed.Dispose();
-        }
-        
-        //sort the blas
-
-        blasArray = blas.ToArray();
-    }
-    
-    
     
     [Range(0, 32)] public int minDepth = 0;
     [Range(0, 32)] public int maxDepth = 20;

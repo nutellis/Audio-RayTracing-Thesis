@@ -12,7 +12,6 @@ public class BVHManager : MonoBehaviour
 
     Bounds sceneBounds;
     
-    
     public ComputeShader bvhGeneratorShader;
 
     //bvh tree related kernels
@@ -44,8 +43,17 @@ public class BVHManager : MonoBehaviour
 
 
     int objectCount = 0;
+    private AcousticBase[] allObjects;
+    
+    private bool needsRefit;
     
     public bool showDebug;
+
+    public List<GPUBlas> globalBlasNodes = new List<GPUBlas>();
+    public List<Triangle> globalTriangleSoup = new List<Triangle>();
+
+    // This maps: ObjectInstanceID -> StartIndex in the globalBlasNodes
+    public Dictionary<int, int> objectToBlasOffset = new Dictionary<int, int>();
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
@@ -64,6 +72,8 @@ public class BVHManager : MonoBehaviour
 
         CollectBounds();
 
+        CreateMegaArrays();
+
         InitializeBuffers();
         InitializeBVHBuffer();
         InitializeRefitBuffers();
@@ -74,8 +84,34 @@ public class BVHManager : MonoBehaviour
 
         BuildTree();
 
-        uint[] mortonDebug = new uint[objectCount];
-        mortonCodesBuffer.GetData(mortonDebug);
+    }
+
+    private void CreateMegaArrays()
+    {
+        foreach (var obj in allObjects)
+        {
+            int nodeStartOffset = globalBlasNodes.Count;
+            int triStartOffset = globalTriangleSoup.Count;
+        }
+        //         // 1. Record where this object's BLAS starts in the big buffer
+        //         int nodeStartOffset = globalBlasNodes.Count;
+        //         int triStartOffset = globalTriangleSoup.Count;
+        //     
+        objectToBlasOffset[obj.InstanceID] = nodeStartOffset;
+        //
+        //         // 2. Adjust internal pointers
+        //         // Since your 'leftFirst' is relative to the start of the object's BLAS,
+        //         // we can keep it relative OR make it absolute. 
+        //         // Let's keep it relative to keep the copy fast.
+        //     
+        //         // 3. Copy the data
+        //         globalBlasNodes.AddRange(obj.blasArray);
+        //         globalTriangleSoup.AddRange(obj.triangles); 
+        //     
+        //         // IMPORTANT: If 'leftFirst' in your TriangleNode points to a triangle index,
+        //         // you MUST add triStartOffset to it so it finds the right triangle in the soup.
+        //         AdjustTriangleIndices(nodeStartOffset, obj.blasArray.Length, triStartOffset);
+ 
     }
 
     private void OnDestroy()
@@ -107,12 +143,26 @@ public class BVHManager : MonoBehaviour
 
     public void UpdateBVH()
     {
-        CollectBounds();
-        UpdateBounds();
-        MortonGenerationBuffersSetup();
-        RadixSort();
-        BuildTree();
-        RefitBVH();
+        if (needsRefit)
+        {
+            CollectBounds();
+            UpdateBounds();
+            MortonGenerationBuffersSetup();
+            RadixSort();
+            BuildTree();
+            RefitBVH();
+
+            needsRefit = false;
+        }
+
+        for (int i = 0; i < allObjects.Length; i++)
+        {
+            if (allObjects[i].transform.hasChanged)
+            {
+                needsRefit = true;
+                break;
+            }
+        }
     }
 
     void CollectBounds()
@@ -121,7 +171,7 @@ public class BVHManager : MonoBehaviour
         primitiveIds.Clear();
         primitiveBounds.Clear();
         
-        var allObjects = ObjectRegistry<AcousticBase>.Instance.GetValues();
+        allObjects = ObjectRegistry<AcousticBase>.Instance.GetValues();
         objectCount = allObjects.Length;
         
         sceneBounds = allObjects[0].collider.bounds;
@@ -135,7 +185,8 @@ public class BVHManager : MonoBehaviour
 
             //get scene bounds
             sceneBounds.Encapsulate(obj.collider.bounds);
-        
+            
+            obj.transform.hasChanged = false;
         }
     }
 
@@ -315,6 +366,7 @@ public class BVHManager : MonoBehaviour
         new Color(0.5f, 0.5f, 1f), // Level 7
         Color.red // Level 8+ (Usually Leaves/Deepest)
     };
+
 
     void DrawNode(GPUNode[] nodes, int nodeIdx, int currentDepth)
     {

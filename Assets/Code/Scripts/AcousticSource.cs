@@ -2,7 +2,7 @@ using System;
 using UnityEngine;
 using UnityEngine.Serialization;
 
-public class AcousticSource : AcousticBase
+public class AcousticSource : MonoBehaviour
 {
     public AudioClip audioClip;
     public AudioSource audioSource;
@@ -30,10 +30,10 @@ public class AcousticSource : AcousticBase
         return sortingGain;
     }
 
-    protected override void Awake()
-    {
-        base.Awake();
-    }
+    // protected override void Awake()
+    // {
+    //     base.Awake();
+    // }
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()

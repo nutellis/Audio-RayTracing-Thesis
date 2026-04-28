@@ -28,6 +28,7 @@ struct DebugInfo
 };
 RWStructuredBuffer<DebugInfo> debugInfo;
 
+// Ray relevant structures
 struct Ray
 {
     float3 origin; 
@@ -53,7 +54,7 @@ struct RayHit
 };
 RWStructuredBuffer<RayHit> rayHitBuffer;
 
-
+// TLAS
 struct BVHNode
 {
     //leaf data
@@ -74,7 +75,7 @@ struct BVHNode
 };
 RWStructuredBuffer<BVHNode> tree;
 
-
+// Source positions and Path information for Direct sounds
 struct SourceData
 {
     float3 origin;
@@ -89,7 +90,7 @@ struct PathData
     float2 arrivalAngles; // Lateral (Left/Right) and Elevation (Up/Down)
 
     float distance;
-    float gain; // Based on 1/d^2 and later absorption
+    float gain;
     
     int sourceId;
     
@@ -97,6 +98,27 @@ struct PathData
 };
 AppendStructuredBuffer<PathData> pathBuffer;
 
+// BLAS Related Structures
+struct TriangleNode
+{
+    float3 aabbMin; 
+    float3 aabbMax; 
+    
+    int leftFirst;  
+
+    int triCount;   
+};
+RWStructuredBuffer<TriangleNode> triangleTree;
+
+struct Triangle
+{
+    float3 vertexA;
+    float3 vertexB;
+    float3 vertexC;
+    
+    float3 padding;
+};
+StructuredBuffer<Triangle> triangleSoup;
 
 // https://www.reedbeta.com/blog/hash-functions-for-gpu-rendering/
 uint PcgHash(uint input)

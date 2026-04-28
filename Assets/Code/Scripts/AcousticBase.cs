@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using UnityEngine.Events;
 
 
 public class AcousticBase: MonoBehaviour
@@ -11,7 +12,7 @@ public class AcousticBase: MonoBehaviour
 
     protected virtual void Awake()
     {
-        InstanceID = GetInstanceID();
+        InstanceID = gameObject.GetInstanceID();
 
         collider = gameObject.GetComponent<Collider>();
          if (collider == null)
@@ -33,10 +34,6 @@ public class AcousticBase: MonoBehaviour
     {
         ObjectRegistry<AcousticBase>.Instance.UnregisterObject(InstanceID);
     }
-
-    protected void Update()
-    {
-    }
     
     protected  void LocalBoundsToWorld(Vector3 bMin, Vector3 bMax)
     {
@@ -54,4 +51,5 @@ public class AcousticBase: MonoBehaviour
         
         bounds = new Bounds(worldCenter, worldExtents * 2f);
     }
+
 }

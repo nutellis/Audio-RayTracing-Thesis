@@ -2,9 +2,8 @@ using System;
 using System.Runtime.InteropServices;
 using UnityEngine;
 
-public class ListenerController : AcousticBase
+public class ListenerController : MonoBehaviour
 {
-
     public ComputeShader audioShader;
 
     ComputeBuffer rayBuffer;
@@ -13,11 +12,11 @@ public class ListenerController : AcousticBase
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
 
-    protected override void Awake()
-    {
-        base.Awake();
-
-    }
+    // protected override void Awake()
+    // {
+    //     base.Awake();
+    //
+    // }
     
     void Start()
     {

@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Unity.Mathematics;
 using UnityEngine;
 
 namespace Code.Data
@@ -58,5 +59,19 @@ namespace Code.Data
 
         public int triCount;
 
+    }
+    public struct Triangle
+    {
+        public float3 vertexA;
+        public float3 vertexB;
+        public float3 vertexC;
+
+        public float3 padding;
+    }
+
+    public struct ObjectData
+    {
+        public GPUBlas[] blasData;
+        public Triangle[] triangles;
     }
 }
