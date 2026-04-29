@@ -76,7 +76,7 @@ struct BVHNode
 RWStructuredBuffer<BVHNode> tree;
 
 // Source positions and Path information for Direct sounds
-struct SourceData
+struct SourceData 
 {
     float3 origin;
     
@@ -272,7 +272,7 @@ bool IntersectAny(float3 origin, float3 direction, float maxDistance, int2 ignor
         
         if ( node.primitiveIndex != -1)
         {
-            debugInfo[0].index = node.objectId;
+            debugInfo[0].index = node.primitiveIndex;
             
             if (node.objectId == ignoreObjectsId.x || node.objectId == ignoreObjectsId.y)
             {

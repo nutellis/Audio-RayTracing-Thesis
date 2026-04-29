@@ -103,6 +103,10 @@ public class AudioManager : MonoBehaviour
 
         audioShader.SetBuffer(traceKernel, "tree", bvhManager.GetBVHBuffer());
 
+        audioShader.SetBuffer(traceKernel, "triangles", bvhManager.GetTrianglesBuffer());
+        audioShader.SetBuffer(traceKernel, "blasNodes", bvhManager.GetBlasNodesBuffer());
+        //audioShader.SetBuffer(traceKernel, "instances", );
+        
         //trace rays
         pathBuffer.SetCounterValue(0);
 

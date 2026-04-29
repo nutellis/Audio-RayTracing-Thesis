@@ -38,16 +38,15 @@ namespace Code.Data
     {
         public Vector3 aabbMin;
         public Vector3 aabbMax;
-        public int primitiveIndex;
-
+        
         public int leftChild;
         public int rightChild;
 
         public int parent;
-
-        public int objectID;
         
-        float padding;
+        public int primitiveIndex;
+        
+        float2 padding;
     }
     
     public struct GPUBlas
@@ -69,9 +68,25 @@ namespace Code.Data
         public float3 padding;
     }
 
-    public struct ObjectData
+    public struct BlasMetada
     {
-        public GPUBlas[] blasData;
-        public Triangle[] triangles;
+        public int blasOffset;
+        public int blasCount;
+        
+        public int trianglesOffset;
+        public int trianglesCount;
+    }
+
+    public struct Instance
+    {
+        public Matrix4x4 transformMatrix;
+
+        public int objectId; // unique object id (InstanceID)
+
+        public int blasOffset;
+        public int blasCount;
+        
+        public int trianglesOffset;
+        public int trianglesCount;
     }
 }
