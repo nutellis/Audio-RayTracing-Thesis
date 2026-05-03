@@ -31,7 +31,7 @@ public class CsoundController : MonoBehaviour
 
         csound.processClipAudio = true;
         PushAbsorption();
-
+        
         AudioSource source = csound.GetComponent<AudioSource>();
         if (source == null)
         {
@@ -61,6 +61,17 @@ public class CsoundController : MonoBehaviour
         {
             PushAbsorption();
         }
+    }
+
+    void PlaySound()
+    {
+        //initializes and plays the audio source
+        
+    }
+
+    void ModifyPlayingSound() // push variables to csound
+    {
+        
     }
 
     void PushAbsorption()

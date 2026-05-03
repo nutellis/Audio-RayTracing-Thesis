@@ -19,8 +19,6 @@ cbuffer MortonCodeGenerationParams
 StructuredBuffer<float3> centroidsBuffer;
 RWStructuredBuffer<int> primitiveIndicesBuffer;
 
-StructuredBuffer<int> primitiveObjectIds;
-
 RWStructuredBuffer<uint> mortonCodesBuffer;
 
 
@@ -60,7 +58,7 @@ void GenerateMortonCodes(uint3 id : SV_DispatchThreadID)
     float3 c = centroidsBuffer[i];
 
     // normalize to [0,1]
-    float3 normalized = (c - sceneMin) / (sceneMax - sceneMin);
+    float3 normalized = (c - sceneMin) / max(sceneMax - sceneMin, 1e-5f);
 
     uint code = Morton3D(normalized.x, normalized.y, normalized.z);
 
@@ -81,7 +79,7 @@ RWStructuredBuffer<uint> globalOffsets : register(u1); // Size: [NumBlocks * 16]
 
 // Output Buffers (Ping-pong these in C#)
 RWStructuredBuffer<uint> outputMorton : register(u2);
-RWStructuredBuffer<uint> outputObjectIDs : register(u3);
+RWStructuredBuffer<uint> outputIndices : register(u3);
 
 uint shift;
 
@@ -204,32 +202,26 @@ void ScatterPass(uint3 id : SV_DispatchThreadID, uint3 groupID : SV_GroupID, uin
         uint finalIndex = s_blockDigitOffsets[digit] + localRank;
 
         outputMorton[finalIndex] = code;
-        outputObjectIDs[finalIndex] = obj;
+        outputIndices[finalIndex] = obj;
     }
 }
 
-struct BVHNode
+struct TlasNode
 {
     //leaf data
     float3 aabbMin;
     float3 aabbMax;
-    int primitiveIndex;
-
+    
     //internal data
     int leftChild;
     int rightChild;
     
     int parent;
+    int primitiveIndex;
     
-    int objectId;
-    
-    float padding;
-    
-    // uint firstPrim;
-    // uint primCount;
-
+    float2 padding;
 };
-RWStructuredBuffer<BVHNode> bvhNodes; // Size: 2N - 1
+RWStructuredBuffer<TlasNode> bvhNodes; // Size: 2N - 1
 
 StructuredBuffer<uint> sortedMortonCodes;
 StructuredBuffer<uint> sortedIndices;
@@ -324,7 +316,6 @@ void BuildHierarchy(uint3 id : SV_DispatchThreadID)
     {
         leftChild = (objectCount - 1 + gamma); // cause leaf nodes are stored after internal nodes. bvh tree is 2N-1 meaning that N-1 are internal and the rest N are the actual leaf nodes
         bvhNodes[leftChild].primitiveIndex = sortedIndices[gamma];
-        bvhNodes[leftChild].objectId = primitiveObjectIds[sortedIndices[gamma]];
     }
     else // internal node
     {
@@ -335,7 +326,6 @@ void BuildHierarchy(uint3 id : SV_DispatchThreadID)
     {
         rightChild = (objectCount - 1 + (gamma + 1));
         bvhNodes[rightChild].primitiveIndex = sortedIndices[gamma + 1];
-        bvhNodes[rightChild].objectId = primitiveObjectIds[sortedIndices[gamma + 1]];
     }
     else
     {

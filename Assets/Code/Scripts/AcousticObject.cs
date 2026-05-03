@@ -28,7 +28,8 @@ public class AcousticObject : AcousticBase
            objectInstance = new Instance
            {
                 objectId = InstanceID,
-                transformMatrix = transform.localToWorldMatrix,
+                worldToLocal = transform.worldToLocalMatrix,
+                localToWorld = transform.localToWorldMatrix,
                 blasOffset = metadata.blasOffset,
                 blasCount = metadata.blasCount,
                 trianglesOffset = metadata.trianglesOffset,
@@ -46,7 +47,8 @@ public class AcousticObject : AcousticBase
     [Range(0, 32)] public int minDepth = 0;
     [Range(0, 32)] public int maxDepth = 20;
     public bool showDebug;
-    private GPUBlas[] blasArray;
+    private GPUBlasNode[] blasArray;
+    private Triangle[] triangles;
     private void OnDrawGizmosSelected()
     {
         if (!showDebug) return;
@@ -56,7 +58,10 @@ public class AcousticObject : AcousticBase
             var blasOffset = objectInstance.blasOffset;
             var blasCount = objectInstance.blasCount;
             blasArray = manager.globalBlasNodes.GetRange(blasOffset, blasCount).ToArray();
+            
+            triangles = manager.globalTriangleSoup.GetRange(objectInstance.trianglesOffset, objectInstance.trianglesCount).ToArray();
             DrawNode(0, 0);
+            //Debug.Log("End of Tree");
         }
     }
     
@@ -64,7 +69,7 @@ public class AcousticObject : AcousticBase
     {
         if (depth > maxDepth || nodeIdx >= blasArray.Length) return;
     
-        GPUBlas node = blasArray[nodeIdx];
+        GPUBlasNode node = blasArray[nodeIdx];
         bool isVisible = depth >= minDepth;
     
         if (isVisible)
@@ -75,20 +80,25 @@ public class AcousticObject : AcousticBase
             float3 center = (node.aabbMin + node.aabbMax) * 0.5f;
             float3 size = node.aabbMax - node.aabbMin;
             Gizmos.DrawWireCube(center, size);
+            
+            //Debug.Log($"AABB center {center} and size {size}");
+            
     
-            // If triCount > 0, this is a leaf node
-            // if (node.triCount > 0)
-            // {
-            //     Gizmos.color = Color.yellow;
-            //     for (int i = 0; i < node.triCount; i++)
-            //     {
-            //         int triIdx = triangleIndices[node.leftFirst + i];
-            //         Triangle tri = triangles[triIdx];
-            //         Gizmos.DrawLine(tri.vertexA, tri.vertexB);
-            //         Gizmos.DrawLine(tri.vertexB, tri.vertexC);
-            //         Gizmos.DrawLine(tri.vertexC, tri.vertexA);
-            //     }
-            // }
+            //If triCount > 0, this is a leaf node
+            if (node.triCount > 0)
+            {
+                Gizmos.color = Color.yellow;
+                for (int i = 0; i < node.triCount; i++)
+                {
+                    Triangle tri = triangles[node.leftFirst + i];
+                    
+                    Gizmos.DrawLine(tri.vertexA, tri.vertexB);
+                    Gizmos.DrawLine(tri.vertexB, tri.vertexC);
+                    Gizmos.DrawLine(tri.vertexC, tri.vertexA);
+                    
+                    //Debug.Log($"Drawing Triangle: A({tri.vertexA}), B({tri.vertexB}), C({tri.vertexC})");
+                }
+            }
         }
     
         // If triCount == 0, this is an inner node. 

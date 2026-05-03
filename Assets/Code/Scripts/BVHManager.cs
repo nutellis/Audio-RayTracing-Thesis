@@ -10,7 +10,6 @@ using UnityEngine;
 
 public class BVHManager : MonoBehaviour
 {
-    List<int> primitiveIds;
     List<Vector3> primitiveCentroids;
     List<Bounds> primitiveBounds;
 
@@ -30,7 +29,6 @@ public class BVHManager : MonoBehaviour
     ComputeBuffer centroidsBuffer;
     ComputeBuffer mortonCodesBuffer;
     ComputeBuffer primitiveIndicesBuffer;
-    ComputeBuffer primitiveObjectIds;
     ComputeBuffer deltas;
 
     ComputeBuffer outMortonBuffer;
@@ -46,9 +44,15 @@ public class BVHManager : MonoBehaviour
     int[] zeroFlags; // Cached array of zeros
 
     //BLAS 
+    public List<GPUBlasNode> globalBlasNodes = new List<GPUBlasNode>();
+    public List<Triangle> globalTriangleSoup = new List<Triangle>();
+    
     ComputeBuffer blasNodesBuffer;
     ComputeBuffer trianglesBuffer;
+    
+    
 
+    // general
     int objectCount = 0;
     private AcousticBase[] allObjects;
     
@@ -57,15 +61,11 @@ public class BVHManager : MonoBehaviour
     
     public bool showDebug;
 
-    public List<GPUBlas> globalBlasNodes = new List<GPUBlas>();
-    public List<Triangle> globalTriangleSoup = new List<Triangle>();
-
     Dictionary<int, BlasMetada> objectMetadata = new Dictionary<int, BlasMetada>();
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        primitiveIds = new List<int>();
         primitiveCentroids = new List<Vector3>();
         primitiveBounds = new List<Bounds>();
 
@@ -108,6 +108,9 @@ public class BVHManager : MonoBehaviour
         atomicFlagsBuffer?.Release();
 
         deltas?.Release();
+
+        blasNodesBuffer?.Release();
+        trianglesBuffer?.Release();
     }
     
     void UpdateBounds()
@@ -144,7 +147,6 @@ public class BVHManager : MonoBehaviour
     private void CollectBounds()
     {
         primitiveCentroids.Clear();
-        primitiveIds.Clear();
         primitiveBounds.Clear();
         
         allObjects = ObjectRegistry<AcousticBase>.Instance.GetValues();
@@ -156,8 +158,6 @@ public class BVHManager : MonoBehaviour
         {
             var bounds = obj.collider.bounds;
             primitiveCentroids.Add(bounds.center);
-            primitiveIds.Add(obj.);
-
             primitiveBounds.Add(bounds);
 
             //get scene bounds
@@ -172,7 +172,9 @@ public class BVHManager : MonoBehaviour
         centroidsBuffer = new ComputeBuffer(objectCount, sizeof(float) * 3);
         mortonCodesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
         primitiveIndicesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
-        primitiveObjectIds = new ComputeBuffer(objectCount, sizeof(int));
+        
+        blasNodesBuffer = new ComputeBuffer(globalBlasNodes.Count,32, ComputeBufferType.Structured);
+        trianglesBuffer = new ComputeBuffer(globalTriangleSoup.Count, 48, ComputeBufferType.Structured);
 
         outMortonBuffer = new ComputeBuffer(objectCount, sizeof(uint));
         outIndicesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
@@ -190,7 +192,6 @@ public class BVHManager : MonoBehaviour
         bvhGeneratorShader.SetVector("sceneMax", sceneBounds.max);
 
         centroidsBuffer.SetData(primitiveCentroids);
-        primitiveObjectIds.SetData(primitiveIds);
 
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "centroidsBuffer", centroidsBuffer);
         bvhGeneratorShader.SetBuffer(generateMortonCodeKernel, "primitiveIndicesBuffer", primitiveIndicesBuffer);
@@ -224,7 +225,7 @@ public class BVHManager : MonoBehaviour
             bvhGeneratorShader.SetBuffer(scatterPassKernel, "primitiveIndicesBuffer", primitiveIndicesBuffer);
             bvhGeneratorShader.SetBuffer(scatterPassKernel, "globalOffsets", globalOffsetsBuffer);
             bvhGeneratorShader.SetBuffer(scatterPassKernel, "outputMorton", outMortonBuffer);
-            bvhGeneratorShader.SetBuffer(scatterPassKernel, "outputObjectIDs", outIndicesBuffer);
+            bvhGeneratorShader.SetBuffer(scatterPassKernel, "outputIndices", outIndicesBuffer);
             bvhGeneratorShader.Dispatch(scatterPassKernel, groups, 1, 1);
 
             // swap old with new ordered buffer.
@@ -239,8 +240,8 @@ public class BVHManager : MonoBehaviour
         // Internal nodes: 0 to N-2
         // Leaf nodes: N-1 to 2N-2
         int totalNodes = (objectCount * 2) - 1;
-        bvhNodeBuffer = new ComputeBuffer(totalNodes, Marshal.SizeOf(typeof(GPUNode)));
-        GPUNode[] clearNodes = new GPUNode[totalNodes];
+        bvhNodeBuffer = new ComputeBuffer(totalNodes, Marshal.SizeOf(typeof(GPUTlasNode)));
+        GPUTlasNode[] clearNodes = new GPUTlasNode[totalNodes];
         for (int i = 0; i < totalNodes; i++)
         {
             clearNodes[i].parent = -1;
@@ -262,7 +263,6 @@ public class BVHManager : MonoBehaviour
         bvhGeneratorShader.SetBuffer(hierarchyKernel, "bvhNodes", bvhNodeBuffer);
         bvhGeneratorShader.SetBuffer(hierarchyKernel, "sortedMortonCodes", mortonCodesBuffer);
         bvhGeneratorShader.SetBuffer(hierarchyKernel, "sortedIndices", primitiveIndicesBuffer);
-        bvhGeneratorShader.SetBuffer(hierarchyKernel, "primitiveObjectIds", primitiveObjectIds);
 
         bvhGeneratorShader.SetBuffer(hierarchyKernel, "deltas", deltas);
 
@@ -313,15 +313,17 @@ public class BVHManager : MonoBehaviour
     }
 
     public int debugDepth = 5;
-
+    Instance[] instances;
 #if UNITY_EDITOR
     void OnDrawGizmos()
     {
         if (!showDebug) return;
         if (bvhNodeBuffer == null || objectCount == 0) return;
     
-        GPUNode[] nodes = new GPUNode[objectCount * 2 - 1];
+        GPUTlasNode[] nodes = new GPUTlasNode[objectCount * 2 - 1];
+        instances = new Instance[objectCount];
         bvhNodeBuffer.GetData(nodes);
+        instances = ObjectRegistry<Instance>.Instance.GetValues();
 
         // Recursive draw call
         DrawNode(nodes, 0, 0); // Start at root (index 0)
@@ -342,12 +344,12 @@ public class BVHManager : MonoBehaviour
     };
 
 
-    void DrawNode(GPUNode[] nodes, int nodeIdx, int currentDepth)
+    void DrawNode(GPUTlasNode[] nodes, int nodeIdx, int currentDepth)
     {
         if (nodeIdx < 0 || nodeIdx >= nodes.Length || currentDepth > debugDepth)
             return;
 
-        GPUNode node = nodes[nodeIdx];
+        GPUTlasNode node = nodes[nodeIdx];
 
         // 1. Pick color based on depth
         // Uses modulo to cycle colors if the tree is deeper than the array
@@ -371,10 +373,10 @@ public class BVHManager : MonoBehaviour
 
         if (node.primitiveIndex != -1)
         {
-            int id = node.objectID;
+            int objectId = instances[node.primitiveIndex].objectId;
             Vector3 labelPos = center + Vector3.up * 0.05f;
 
-            string label = $"ID: {id}";
+            string label = $"ID: {objectId}";
 
             UnityEditor.Handles.Label(labelPos, label);
         }
@@ -386,12 +388,7 @@ public class BVHManager : MonoBehaviour
         return bvhNodeBuffer;
     }
 
-    // public ComputeBuffer GetBLASMegaArray()
-    // {
-    // }
-    
-    
-    
+
 //-----------------------------------------------------------------------------------
 // BLAS Funcitons
 //-----------------------------------------------------------------------------------
@@ -426,7 +423,7 @@ public class BVHManager : MonoBehaviour
             var triangleIndices = new NativeArray<int>(triangleCount, Allocator.Persistent);
             for (int i = 0; i < triangleCount; i++) triangleIndices[i] = i;
 
-            var blas = new NativeArray<GPUBlas>(triangleCount * 2 - 1, Allocator.Persistent);
+            var blas = new NativeArray<GPUBlasNode>(triangleCount * 2 - 1, Allocator.Persistent);
             NativeArray<int> tempNodesUsed = new NativeArray<int>(1, Allocator.TempJob);
             var meshDataArray = Mesh.AcquireReadOnlyMeshData(sharedMesh);
             var job = new BuildBlasJob
@@ -456,7 +453,7 @@ public class BVHManager : MonoBehaviour
         }
     }
     
-    private BlasMetada AddToMegaArrays(int key, GPUBlas[] blas, Triangle[] triangles)
+    private BlasMetada AddToMegaArrays(int key, GPUBlasNode[] blas, Triangle[] triangles)
     {
         int nodeStartOffset = globalBlasNodes.Count;
         int triStartOffset = globalTriangleSoup.Count;
@@ -474,17 +471,14 @@ public class BVHManager : MonoBehaviour
         
         //register with the dictionary to guarantee unique values
         objectMetadata.Add(key, metadata);
-        
+
         return metadata;
     }
-        //         // IMPORTANT: If 'leftFirst' in your TriangleNode points to a triangle index,
-        //         // you MUST add triStartOffset to it so it finds the right triangle in the soup.
-        //         AdjustTriangleIndices(nodeStartOffset, obj.blasArray.Length, triStartOffset);
         
     [BurstCompile]
     struct BuildBlasJob : IJob
     {
-        public NativeArray<GPUBlas> blas;
+        public NativeArray<GPUBlasNode> blas;
         public NativeArray<Triangle> triangles;
         public NativeArray<float3> centroids;
         public NativeArray<int> triangleIndices;
@@ -497,7 +491,7 @@ public class BVHManager : MonoBehaviour
         public void Execute()
         {
             GetTriangles();
-            GPUBlas rootNode = blas[0];
+            GPUBlasNode rootNode = blas[0];
             
             rootNode.leftFirst = 0;
             rootNode.triCount = triangles.Length;
@@ -569,7 +563,7 @@ public class BVHManager : MonoBehaviour
         
         void UpdateBlasBounds(int nodeIdx)
         {
-            GPUBlas node = blas[nodeIdx];
+            GPUBlasNode node = blas[nodeIdx];
             float3 bmin = new float3(1e30f, 1e30f, 1e30f);
             float3 bmax = new float3(-1e30f, -1e30f, -1e30f);
             
@@ -586,7 +580,7 @@ public class BVHManager : MonoBehaviour
             blas[nodeIdx] = node;
         }
 
-        float FindBestSplitPlane( ref GPUBlas node, ref int axis, ref float splitPos, ref BlasBuildCache cache)
+        float FindBestSplitPlane( ref GPUBlasNode node, ref int axis, ref float splitPos, ref BlasBuildCache cache)
         {
             float bestCost = 1e30f;
             
@@ -656,7 +650,7 @@ public class BVHManager : MonoBehaviour
             return bestCost;
         }
 
-        float CalculateNodeCost( ref GPUBlas node )
+        float CalculateNodeCost( ref GPUBlasNode node )
         {
             float3 e = node.aabbMax - node.aabbMin;
             float surfaceArea = e.x * e.y + e.y * e.z + e.z * e.x;
@@ -665,7 +659,7 @@ public class BVHManager : MonoBehaviour
 
         void SubdivideBlas(int nodeIdx, ref BlasBuildCache cache)
         {
-            GPUBlas node = blas[nodeIdx];
+            GPUBlasNode node = blas[nodeIdx];
             int axis = 0;
             float splitPos = 0;
             float splitCost = FindBestSplitPlane( ref node, ref axis, ref splitPos, ref cache);
@@ -695,12 +689,12 @@ public class BVHManager : MonoBehaviour
             int leftChildIdx = nodesUsed[0]++;
             int rightChildIdx = nodesUsed[0]++;
             
-            GPUBlas leftChild = new GPUBlas {
+            GPUBlasNode leftChild = new GPUBlasNode {
                 leftFirst = node.leftFirst,
                 triCount = leftCount
             };
 
-            GPUBlas rightChild = new GPUBlas {
+            GPUBlasNode rightChild = new GPUBlasNode {
                 leftFirst = i,
                 triCount = node.triCount - leftCount
             };
@@ -738,7 +732,7 @@ public class BVHManager : MonoBehaviour
         public float Area()
         {
             float3 e = bmax - bmin; // box extent
-            return e.x * e.y + e.y * e.z + e.z * e.x;
+            return  (e.x * e.y + e.y * e.z + e.z * e.x);
         }
     };
     
@@ -776,11 +770,13 @@ public class BVHManager : MonoBehaviour
 
     public ComputeBuffer GetTrianglesBuffer()
     {
-        throw new System.NotImplementedException();
+        trianglesBuffer.SetData(globalTriangleSoup);
+        return trianglesBuffer;
     }
 
     public ComputeBuffer GetBlasNodesBuffer()
     {
-        throw new System.NotImplementedException();
+        blasNodesBuffer.SetData(globalBlasNodes);
+        return blasNodesBuffer;
     }
 }

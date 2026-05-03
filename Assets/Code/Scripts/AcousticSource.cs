@@ -15,7 +15,7 @@ public class AcousticSource : MonoBehaviour
     float sortingGain;
 
     private float baseAmplitude;
-    private float finalGain;
+    private float attenuation;
     private float baseAmplitudeWeighted;
 
     public float volume = 0;
@@ -48,7 +48,7 @@ public class AcousticSource : MonoBehaviour
         audioSource.clip = audioClip;
         audioSource.volume = volume;
         audioSource.playOnAwake = false;
-        
+
     }
 
     public float GetScore(Vector3 listenerPos)
@@ -60,7 +60,7 @@ public class AcousticSource : MonoBehaviour
     public void Update()
     {
         if (!audioSource) return;
-        audioSource.volume = finalGain;
+        audioSource.volume = volume;
     }
 
     private float DistanceAttenuation(float distance, float referenceDistance, float falloffFactor)
@@ -70,10 +70,10 @@ public class AcousticSource : MonoBehaviour
         return gain;
     }
 
-    public void CalculateFinalGain(float distance)
+    public void CalculateDistanceAttenuation(float distance)
     {
-        finalGain = baseAmplitude * 1f / (1f + distance);// * DistanceAttenuation(distance, 1f, 1f);
-        volume = finalGain;
+        attenuation = baseAmplitude * 1f / (1f + distance);// * DistanceAttenuation(distance, 1f, 1f);
+        volume = attenuation;
     }
 
     public void RegisterSound()

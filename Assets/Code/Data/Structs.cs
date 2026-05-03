@@ -13,7 +13,9 @@ namespace Code.Data
     
         public int sourceId;
 
-        public Vector3 padding;
+        public int state; // 0 = direct, 1 = reflection, 2 = ??
+        
+        public Vector2 padding;
     }
     
     [StructLayout(LayoutKind.Sequential)]
@@ -34,7 +36,7 @@ namespace Code.Data
     }
     
     [StructLayout(LayoutKind.Sequential)]
-    public struct GPUNode
+    public struct GPUTlasNode
     {
         public Vector3 aabbMin;
         public Vector3 aabbMax;
@@ -49,16 +51,19 @@ namespace Code.Data
         float2 padding;
     }
     
-    public struct GPUBlas
+    [StructLayout(LayoutKind.Sequential)]
+    public struct GPUBlasNode
     {
         public Vector3 aabbMin;
+        
         public Vector3 aabbMax;
         
         public int leftFirst;
 
         public int triCount;
-
     }
+    
+    [StructLayout(LayoutKind.Sequential)]
     public struct Triangle
     {
         public float3 vertexA;
@@ -77,16 +82,20 @@ namespace Code.Data
         public int trianglesCount;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
     public struct Instance
     {
-        public Matrix4x4 transformMatrix;
+        public Matrix4x4 worldToLocal;
+        public Matrix4x4 localToWorld;
 
-        public int objectId; // unique object id (InstanceID)
+        public int objectId;
 
         public int blasOffset;
         public int blasCount;
         
         public int trianglesOffset;
         public int trianglesCount;
+        
+        float3 padding;
     }
 }
