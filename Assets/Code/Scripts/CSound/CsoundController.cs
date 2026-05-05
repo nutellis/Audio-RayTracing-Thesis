@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.UI;
 
 public class CsoundController : MonoBehaviour
 {
@@ -21,6 +22,46 @@ public class CsoundController : MonoBehaviour
     readonly FrequencyRange freq2000HzRange = new(Frequency.freq2000Hz, Frequency.freq1000Hz);
     readonly FrequencyRange freq4000HzRange = new(Frequency.freq4000Hz, Frequency.freq2000Hz);
 
+    readonly ButterBandPassFilter[] leftBands = new ButterBandPassFilter[6];
+    readonly ButterBandPassFilter[] rightBands = new ButterBandPassFilter[6];
+
+    // Probably what will do in another class
+    void OnAudioFilterRead(float[] data, int channels)
+    {
+        for (int i = 0; i < data.Length; i += channels)
+        {
+            float inputL = data[i];
+            float inputR = data[i + 1];
+
+            float outL = 0f;
+            float outR = 0f;
+
+            outL += leftBands[0].Process(inputL, freq125HzRange.centerFreq, freq125HzRange.bandWidth);
+            outR += rightBands[0].Process(inputR, freq125HzRange.centerFreq, freq125HzRange.bandWidth);
+
+            outL += leftBands[1].Process(inputL, freq250HzRange.centerFreq, freq250HzRange.bandWidth);
+            outR += rightBands[1].Process(inputR, freq250HzRange.centerFreq, freq250HzRange.bandWidth);
+
+            outL += leftBands[2].Process(inputL, freq500HzRange.centerFreq, freq500HzRange.bandWidth);
+            outR += rightBands[2].Process(inputR, freq500HzRange.centerFreq, freq500HzRange.bandWidth);
+
+            outL += leftBands[3].Process(inputL, freq1000HzRange.centerFreq, freq1000HzRange.bandWidth);
+            outR += rightBands[3].Process(inputR, freq1000HzRange.centerFreq, freq1000HzRange.bandWidth);
+
+            outL += leftBands[4].Process(inputL, freq2000HzRange.centerFreq, freq2000HzRange.bandWidth);
+            outR += rightBands[4].Process(inputR, freq2000HzRange.centerFreq, freq2000HzRange.bandWidth);
+
+            outL += leftBands[5].Process(inputL, freq4000HzRange.centerFreq, freq4000HzRange.bandWidth);
+            outR += rightBands[5].Process(inputR, freq4000HzRange.centerFreq, freq4000HzRange.bandWidth);
+
+            // outL *= 1f / 6f; // Normalize to prevent clipping (adjust as needed)
+            // outR *= 1f / 6f;
+
+            data[i] = outL;
+            data[i + 1] = outR;
+        }
+    }
+
     void Start()
     {
         if (csound == null)
@@ -31,7 +72,7 @@ public class CsoundController : MonoBehaviour
 
         csound.processClipAudio = true;
         PushAbsorption();
-        
+
         AudioSource source = csound.GetComponent<AudioSource>();
         if (source == null)
         {
@@ -66,12 +107,12 @@ public class CsoundController : MonoBehaviour
     void PlaySound()
     {
         //initializes and plays the audio source
-        
+
     }
 
     void ModifyPlayingSound() // push variables to csound
     {
-        
+
     }
 
     void PushAbsorption()
@@ -95,11 +136,11 @@ public class CsoundController : MonoBehaviour
         csound.SetChannel("kCenterFreq2000Hz", freq2000HzRange.centerFreq);
         csound.SetChannel("kCenterFreq4000Hz", freq4000HzRange.centerFreq);
 
-        csound.SetChannel("kBand125Hz", freq125HzRange.band);
-        csound.SetChannel("kBand250Hz", freq250HzRange.band);
-        csound.SetChannel("kBand500Hz", freq500HzRange.band);
-        csound.SetChannel("kBand1000Hz", freq1000HzRange.band);
-        csound.SetChannel("kBand2000Hz", freq2000HzRange.band);
-        csound.SetChannel("kBand4000Hz", freq4000HzRange.band);
+        csound.SetChannel("kBand125Hz", freq125HzRange.bandWidth);
+        csound.SetChannel("kBand250Hz", freq250HzRange.bandWidth);
+        csound.SetChannel("kBand500Hz", freq500HzRange.bandWidth);
+        csound.SetChannel("kBand1000Hz", freq1000HzRange.bandWidth);
+        csound.SetChannel("kBand2000Hz", freq2000HzRange.bandWidth);
+        csound.SetChannel("kBand4000Hz", freq4000HzRange.bandWidth);
     }
 }
