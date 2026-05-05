@@ -44,8 +44,8 @@ public class BVHManager : MonoBehaviour
     int[] zeroFlags; // Cached array of zeros
 
     //BLAS 
-    public List<GPUBlasNode> globalBlasNodes = new List<GPUBlasNode>();
-    public List<Triangle> globalTriangleSoup = new List<Triangle>();
+    public List<GPUBlasNode> globalBlasNodes = new();
+    public List<Triangle> globalTriangleSoup = new();
     
     ComputeBuffer blasNodesBuffer;
     ComputeBuffer trianglesBuffer;
@@ -61,7 +61,7 @@ public class BVHManager : MonoBehaviour
     
     public bool showDebug;
 
-    Dictionary<int, BlasMetada> objectMetadata = new Dictionary<int, BlasMetada>();
+    readonly Dictionary<int, BlasMetada> objectMetadata = new();
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
@@ -336,10 +336,10 @@ public class BVHManager : MonoBehaviour
         Color.cyan, // Level 1
         Color.yellow, // Level 2
         Color.magenta, // Level 3
-        new Color(1f, 0.5f, 0f), // Level 4 (Orange)
+        new(1f, 0.5f, 0f), // Level 4 (Orange)
         Color.white, // Level 5
-        new Color(0.5f, 1f, 0.5f), // Level 6
-        new Color(0.5f, 0.5f, 1f), // Level 7
+        new(0.5f, 1f, 0.5f), // Level 6
+        new(0.5f, 0.5f, 1f), // Level 7
         Color.red // Level 8+ (Usually Leaves/Deepest)
     };
 
@@ -393,19 +393,19 @@ public class BVHManager : MonoBehaviour
 // BLAS Funcitons
 //-----------------------------------------------------------------------------------
     
-    static readonly ProfilerMarker bvhBuildMarker = new ProfilerMarker("Acoustic.BuildBLAS");
+    static readonly ProfilerMarker bvhBuildMarker = new("Acoustic.BuildBLAS");
 
     //REMINDER THAT THIS RUNS ON AWAKE() WHICH IS BEFORE START()!
     public BlasMetada BuildBlas(MeshFilter meshFilter)
     {
         // we check if blas already exists, otherwise we build it
         var key = meshFilter.sharedMesh.name.GetHashCode();
-        BlasMetada metadata = new BlasMetada();
-        if (objectMetadata.TryGetValue(key, out metadata))
+        _ = new BlasMetada();
+        if (objectMetadata.TryGetValue(key, out BlasMetada metadata))
         {
             return metadata;
         }
-        
+
         using (bvhBuildMarker.Auto())
         {
             var sharedMesh = meshFilter.sharedMesh;
@@ -424,7 +424,7 @@ public class BVHManager : MonoBehaviour
             for (int i = 0; i < triangleCount; i++) triangleIndices[i] = i;
 
             var blas = new NativeArray<GPUBlasNode>(triangleCount * 2 - 1, Allocator.Persistent);
-            NativeArray<int> tempNodesUsed = new NativeArray<int>(1, Allocator.TempJob);
+            NativeArray<int> tempNodesUsed = new(1, Allocator.TempJob);
             var meshDataArray = Mesh.AcquireReadOnlyMeshData(sharedMesh);
             var job = new BuildBlasJob
             {
@@ -564,8 +564,8 @@ public class BVHManager : MonoBehaviour
         void UpdateBlasBounds(int nodeIdx)
         {
             GPUBlasNode node = blas[nodeIdx];
-            float3 bmin = new float3(1e30f, 1e30f, 1e30f);
-            float3 bmax = new float3(-1e30f, -1e30f, -1e30f);
+            float3 bmin = new(1e30f, 1e30f, 1e30f);
+            float3 bmax = new(-1e30f, -1e30f, -1e30f);
             
             for (int first = node.leftFirst, i = 0; i < node.triCount; i++)
             {
@@ -580,7 +580,7 @@ public class BVHManager : MonoBehaviour
             blas[nodeIdx] = node;
         }
 
-        float FindBestSplitPlane( ref GPUBlasNode node, ref int axis, ref float splitPos, ref BlasBuildCache cache)
+        private float FindBestSplitPlane( ref GPUBlasNode node, ref int axis, ref float splitPos, ref BlasBuildCache cache)
         {
             float bestCost = 1e30f;
             
@@ -600,7 +600,7 @@ public class BVHManager : MonoBehaviour
                 {
                     var b = cache.bins[i];
                     b.triCount = 0;
-                    b.bounds = aabb.Empty();
+                    b.bounds = Aabb.Empty();
                     cache.bins[i] = b;
                 }
                 
@@ -619,8 +619,8 @@ public class BVHManager : MonoBehaviour
 
                     cache.bins[binIdx] = cacheBin;
                 }
-                aabb leftBox = aabb.Empty();
-                aabb rightBox = aabb.Empty();
+                Aabb leftBox = Aabb.Empty();
+                Aabb rightBox = Aabb.Empty();
                 int leftSum = 0, rightSum = 0;
                 for (int i = 0; i < bins - 1; i++)
                 {
@@ -650,7 +650,7 @@ public class BVHManager : MonoBehaviour
             return bestCost;
         }
 
-        float CalculateNodeCost( ref GPUBlasNode node )
+        static float CalculateNodeCost( ref GPUBlasNode node )
         {
             float3 e = node.aabbMax - node.aabbMin;
             float surfaceArea = e.x * e.y + e.y * e.z + e.z * e.x;
@@ -689,12 +689,14 @@ public class BVHManager : MonoBehaviour
             int leftChildIdx = nodesUsed[0]++;
             int rightChildIdx = nodesUsed[0]++;
             
-            GPUBlasNode leftChild = new GPUBlasNode {
+            GPUBlasNode leftChild = new()
+            {
                 leftFirst = node.leftFirst,
                 triCount = leftCount
             };
 
-            GPUBlasNode rightChild = new GPUBlasNode {
+            GPUBlasNode rightChild = new()
+            {
                 leftFirst = i,
                 triCount = node.triCount - leftCount
             };
@@ -714,11 +716,11 @@ public class BVHManager : MonoBehaviour
         }
     };
     
-    struct aabb
+    struct Aabb
     {
-        public static aabb Empty()
+        public static Aabb Empty()
         {
-            return new aabb
+            return new Aabb
             {
                 bmin = new float3(1e30f, 1e30f, 1e30f),
                 bmax = new float3(-1e30f, -1e30f, -1e30f)
@@ -728,7 +730,7 @@ public class BVHManager : MonoBehaviour
         private float3 bmin;
         private float3 bmax;
         public void Grow( float3 p ) { bmin = math.min( bmin, p ); bmax = math.max( bmax, p ); }
-        public void Grow( in aabb b ) { if (b.bmin.x != 1e30f) { Grow( b.bmin ); Grow( b.bmax ); } }
+        public void Grow( in Aabb b ) { if (b.bmin.x != 1e30f) { Grow( b.bmin ); Grow( b.bmax ); } }
         public float Area()
         {
             float3 e = bmax - bmin; // box extent
@@ -737,7 +739,7 @@ public class BVHManager : MonoBehaviour
     };
     
     struct Bin { 
-        public aabb bounds;
+        public Aabb bounds;
         public int triCount;
     };
     

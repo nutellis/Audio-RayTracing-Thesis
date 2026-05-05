@@ -9,7 +9,7 @@ using UnityEngine.Rendering;
 public class AudioManager : MonoBehaviour
 {
     [SerializeField]
-    BVHManager bvhManager;
+    readonly BVHManager bvhManager;
 
     Dictionary<int, AcousticSource> registeredAudioSources; //
     Dictionary<int, AcousticSource> delayedAudioSources;
@@ -30,11 +30,11 @@ public class AudioManager : MonoBehaviour
     ComputeBuffer pathBuffer;
     ComputeBuffer debugBuffer;
     ComputeBuffer instancesBuffer;
-    
-    int maxPaths = 1;
+
+    readonly int maxPaths = 1;
 
     
-    readonly List<int> removalBuffer = new List<int>();
+    readonly List<int> removalBuffer = new();
 
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created

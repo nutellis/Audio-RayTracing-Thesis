@@ -6,7 +6,7 @@ public class AcousticMaterial : ScriptableObject
     public int materialID;
 
     // max absorption is 6 bands
-    int maxEntries = 6;
+    readonly int maxEntries = 6;
     [Tooltip("Absorption coefficients for different frequency bands. Max 6 entries.")]
     public int[] absorptionCoefficients;
 

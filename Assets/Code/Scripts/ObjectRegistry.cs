@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Linq;
 
 // i made it genmeric to use it for BLAS etc but I forgot i also made it a singleton. Too bored to change it.
 // ...
@@ -19,7 +18,7 @@ public class ObjectRegistry<T>
         }
     }
 
-    private Dictionary<int, T> registry;
+    private readonly Dictionary<int, T> registry;
     
     private ObjectRegistry()
     {
