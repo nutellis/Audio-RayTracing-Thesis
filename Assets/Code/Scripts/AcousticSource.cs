@@ -1,6 +1,4 @@
-using System;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 public class AcousticSource : MonoBehaviour
 {
@@ -11,8 +9,8 @@ public class AcousticSource : MonoBehaviour
     public AcousticProfile profile;
     [Tooltip("Can be used to fine-tune the profile.\nCaution if the values are far from the profile you are effectively overriding the profile\nDefault is 0")]
     public float manualDb = 0f;
-    
-    float sortingGain;
+
+    readonly float sortingGain;
 
     private float baseAmplitude;
     private float attenuation;
@@ -72,7 +70,7 @@ public class AcousticSource : MonoBehaviour
 
     public void CalculateDistanceAttenuation(float distance)
     {
-        attenuation = baseAmplitude * 1f / (1f + distance);// * DistanceAttenuation(distance, 1f, 1f);
+        attenuation = baseAmplitude * 1f / (1f + distance); // * DistanceAttenuation(distance, 1f, 1f);
         volume = attenuation;
     }
 
@@ -121,7 +119,7 @@ public class AcousticSource : MonoBehaviour
             $"{activeDb:F1} dB | Weight: {profile.acousticWeight:F2}"
         );
 
-        GUIStyle style = new GUIStyle { fontSize = 12 };
+        GUIStyle style = new() { fontSize = 12 };
         style.normal.textColor = Gizmos.color;
 
         Vector3 midPoint = Vector3.Lerp(start, end, 0.5f);

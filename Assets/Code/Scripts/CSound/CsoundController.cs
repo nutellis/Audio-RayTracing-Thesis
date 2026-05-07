@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.UI;
 
 public class CsoundController : MonoBehaviour
 {
@@ -14,12 +15,12 @@ public class CsoundController : MonoBehaviour
 
     [SerializeField] private readonly bool updateEveryFrame = true;
 
-    readonly FrequencyRange freq125HzRange = new(Frequency.freq125Hz, Frequency.freq0Hz);
-    readonly FrequencyRange freq250HzRange = new(Frequency.freq250Hz, Frequency.freq125Hz);
-    readonly FrequencyRange freq500HzRange = new(Frequency.freq500Hz, Frequency.freq250Hz);
-    readonly FrequencyRange freq1000HzRange = new(Frequency.freq1000Hz, Frequency.freq500Hz);
-    readonly FrequencyRange freq2000HzRange = new(Frequency.freq2000Hz, Frequency.freq1000Hz);
-    readonly FrequencyRange freq4000HzRange = new(Frequency.freq4000Hz, Frequency.freq2000Hz);
+    readonly FrequencyRange freq125HzRange = new(Frequency.freq125Hz);
+    readonly FrequencyRange freq250HzRange = new(Frequency.freq250Hz);
+    readonly FrequencyRange freq500HzRange = new(Frequency.freq500Hz);
+    readonly FrequencyRange freq1000HzRange = new(Frequency.freq1000Hz);
+    readonly FrequencyRange freq2000HzRange = new(Frequency.freq2000Hz);
+    readonly FrequencyRange freq4000HzRange = new(Frequency.freq4000Hz);
 
     void Start()
     {
@@ -31,7 +32,7 @@ public class CsoundController : MonoBehaviour
 
         csound.processClipAudio = true;
         PushAbsorption();
-        
+
         AudioSource source = csound.GetComponent<AudioSource>();
         if (source == null)
         {
@@ -55,25 +56,6 @@ public class CsoundController : MonoBehaviour
         }
     }
 
-    void Update()
-    {
-        if (updateEveryFrame)
-        {
-            PushAbsorption();
-        }
-    }
-
-    void PlaySound()
-    {
-        //initializes and plays the audio source
-        
-    }
-
-    void ModifyPlayingSound() // push variables to csound
-    {
-        
-    }
-
     void PushAbsorption()
     {
         if (csound == null)
@@ -95,11 +77,11 @@ public class CsoundController : MonoBehaviour
         csound.SetChannel("kCenterFreq2000Hz", freq2000HzRange.centerFreq);
         csound.SetChannel("kCenterFreq4000Hz", freq4000HzRange.centerFreq);
 
-        csound.SetChannel("kBand125Hz", freq125HzRange.band);
-        csound.SetChannel("kBand250Hz", freq250HzRange.band);
-        csound.SetChannel("kBand500Hz", freq500HzRange.band);
-        csound.SetChannel("kBand1000Hz", freq1000HzRange.band);
-        csound.SetChannel("kBand2000Hz", freq2000HzRange.band);
-        csound.SetChannel("kBand4000Hz", freq4000HzRange.band);
+        csound.SetChannel("kBand125Hz", freq125HzRange.bandWidth);
+        csound.SetChannel("kBand250Hz", freq250HzRange.bandWidth);
+        csound.SetChannel("kBand500Hz", freq500HzRange.bandWidth);
+        csound.SetChannel("kBand1000Hz", freq1000HzRange.bandWidth);
+        csound.SetChannel("kBand2000Hz", freq2000HzRange.bandWidth);
+        csound.SetChannel("kBand4000Hz", freq4000HzRange.bandWidth);
     }
 }
