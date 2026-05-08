@@ -445,50 +445,50 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         }
     }
     
-     // for (int bounce = 0; bounce <5; bounce++)
-     // {
-     //     RayHit hit = IntersectClosest(currentPos, currentDir, 1000);
-     //    
-     //     if (hit.distance == INF) return; //break;
-     //
-     //     totalDistance += hit.distance;
-     //     float3 hitPos = currentPos + currentDir * hit.distance;
-     //     float3 normal = hit.surfaceNormal;
-     //   
-     //     for (int i = 0; i < sourceCount; i++)
-     //     {
-     //         float3 toSource = sources[i].origin - hitPos;
-     //         float distToSource = length(toSource);
-     //         float3 dirToSource = toSource / distToSource;
-     //
-     //         bool occluded = IntersectAny(hitPos + normal * 0.001, dirToSource, distToSource, sources[i].sourceId);
-     //
-     //         if (!occluded)
-     //         {
-     //             PathData path;
-     //             path.distance = totalDistance + distToSource;
-     //            
-     //             //energy per band / distance * absorption
-     //             //per band
-     //             for (int j = 0; j < 6; j++){
-     //                 // path.gain = (energy[j] / path.distance * material.absoprtion[i]);
-     //             }
-     //             path.gain = 1.0;
-     //             path.sourceId = sources[i].sourceId;
-     //             path.arrivalAngles = float3(0, 0, 0); // todo
-     //             path.type = 1; // reflection
-     //             path.padding = float2(0, 0);
-     //             pathBuffer.Append(path);
-     //         }
-     //     }
-     //
-     //     // REFLECTION
-     //     currentPos = hitPos + normal * 0.001;
-     //     currentDir = normalize(reflect(currentDir, normal));
-     //
-     //     //    // ENERGY LOSS
-     //     //   // energy *= 0.8;
-     //
-     //     //if (energy[0] < 0.01) break;
-     // }
+     for (int bounce = 0; bounce <5; bounce++)
+     {
+         RayHit hit = IntersectClosest(currentPos, currentDir, 1000);
+        
+         if (hit.distance == INF) break;
+     
+         totalDistance += hit.distance;
+         float3 hitPos = currentPos + currentDir * hit.distance;
+         float3 normal = hit.surfaceNormal;
+       
+         for (int i = 0; i < sourceCount; i++)
+         {
+             float3 toSource = sources[i].origin - hitPos;
+             float distToSource = length(toSource);
+             float3 dirToSource = toSource / distToSource;
+     
+             bool occluded = IntersectAny(hitPos + normal * 0.001, dirToSource, distToSource, sources[i].sourceId);
+     
+             if (!occluded) // this is a reflected ray that hit the source directly
+             {
+                 PathData path;
+                 path.distance = totalDistance + distToSource;
+                
+                 //energy per band / distance * absorption
+                 //per band
+                 for (int j = 0; j < 6; j++){
+                     // path.gain = (energy[j] / path.distance * material.absoprtion[i]);
+                 }
+                 path.gain = 1.0;
+                 path.sourceId = sources[i].sourceId;
+                 path.arrivalAngles = float3(0, 0, 0); // todo
+                 path.type = 1; // reflection
+                 path.padding = float2(0, 0);
+                 pathBuffer.Append(path);
+             }
+         }
+     
+         // REFLECTION
+         currentPos = hitPos + normal * 0.001;
+         currentDir = normalize(reflect(currentDir, normal));
+     
+         //    // ENERGY LOSS
+         //   // energy *= 0.8;
+     
+         //if (energy[0] < 0.01) break;
+     }
 }

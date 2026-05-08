@@ -1,4 +1,7 @@
 using System;
+using Unity.Burst;
+using Unity.Collections;
+using Unity.Jobs;
 using UnityEngine;
 using UnityEngine.Serialization;
 
@@ -23,21 +26,27 @@ public class AcousticSource : MonoBehaviour
     public bool isDelayed = false;
     public float delayTime = 0;
     public float timeOfEmission = 0;
+    
+    private NativeArray<float> historyBuffer;
+    private NativeArray<int> state; // [0] writeIndex, [1] wrapMask
+    
+    private NativeArray<float> filterState;
+    private NativeArray<float> outputBlock;
 
+    private float echoDelay = 2000;
+    
+    private int cachedSampleRate;
+    
     //getter for sortingGain
     public float GetSortingGain()
     {
         return sortingGain;
     }
 
-    // protected override void Awake()
-    // {
-    //     base.Awake();
-    // }
-
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
+        cachedSampleRate = AudioSettings.outputSampleRate;
         float finalDb = (manualDb > 0) ? manualDb : profile.dbLevel;
 
         // Calculate once and store
@@ -49,6 +58,20 @@ public class AcousticSource : MonoBehaviour
         audioSource.volume = volume;
         audioSource.playOnAwake = false;
 
+        int historySize = 131072;
+        historyBuffer = new NativeArray<float>(historySize, Allocator.Persistent);
+        state = new NativeArray<int>(2, Allocator.Persistent);
+        state[0] = 0; // writeIndex
+        state[1] = historySize - 1; // wrapMask
+        
+        filterState = new NativeArray<float>(1, Allocator.Persistent);
+        filterState[0] = 0;
+    }
+
+    private void OnDestroy()
+    {
+        if (historyBuffer.IsCreated) historyBuffer.Dispose();
+        if (state.IsCreated) state.Dispose();
     }
 
     public float GetScore(Vector3 listenerPos)
@@ -86,6 +109,101 @@ public class AcousticSource : MonoBehaviour
         }
     }
 
+    void OnAudioFilterRead(float[] data, int channels)
+    {
+        int writeIndex = state[0];
+        int wrapMask = state[1];
+
+        // data.Length is 1024 for Mono, 2048 for Stereo. 
+        // frameCount is always the true number of time slices (e.g., 1024).
+        int frameCount = data.Length / channels;
+
+        for (int i = 0; i < frameCount; i++)
+        {
+            // as the stereo doesnt matter here, we average left-right
+            float monoSample = (channels == 2) 
+                ? (data[i * 2] + data[i * 2 + 1]) * 0.5f 
+                : data[i];
+
+            historyBuffer[writeIndex] = monoSample;
+            writeIndex = (writeIndex + 1) & wrapMask;
+        }
+
+        state[0] = writeIndex;
+        
+        NativeArray<float> tempOutput = new NativeArray<float>(data.Length, Allocator.TempJob);
+        
+        ReadEchoJob echoJob = new ReadEchoJob
+        {
+            historyBuffer = historyBuffer,
+            outputBlock = tempOutput,
+            writeIndex = state[0], 
+            wrapMask = state[1],
+            channels = channels,
+            delayMs = echoDelay,
+            sampleRate = cachedSampleRate,
+            attenuation = 1.0f,
+            filterCoefficient = 1.0f,
+            filterState = filterState
+        };
+        
+        JobHandle handle = echoJob.Schedule();
+        handle.Complete();
+        
+        for (int i = 0; i < data.Length; i++)
+        {
+            data[i] += tempOutput[i];
+        }
+        
+        tempOutput.Dispose();
+    }
+
+
+    [BurstCompile]
+    public struct ReadEchoJob : IJob
+    {
+        [ReadOnly] public NativeArray<float> historyBuffer;
+        public NativeArray<float> outputBlock; 
+
+        public int writeIndex;
+        public int wrapMask;
+        public int channels;
+        
+        public float delayMs;
+        public float sampleRate;
+        public float attenuation;
+        public float filterCoefficient; 
+        
+        public NativeArray<float> filterState; 
+
+        public void Execute()
+        {
+            int delaySamples = (int)((delayMs / 1000f) * sampleRate);
+        
+            int readIndex = (writeIndex - delaySamples + wrapMask + 1) & wrapMask;
+        
+            float lastSample = filterState[0];
+            int frameCount = outputBlock.Length / channels;
+
+            for (int i = 0; i < frameCount; i++)
+            {
+                float rawSample = historyBuffer[readIndex];
+            
+                // here we should put the butterworth filter
+                float filteredSample = lastSample + filterCoefficient * (rawSample - lastSample);
+                lastSample = filteredSample;
+            
+                float finalSample = filteredSample * attenuation;
+            
+                for (int c = 0; c < channels; c++)
+                {
+                    outputBlock[i * channels + c] = finalSample;
+                }
+                readIndex = (readIndex + 1) & wrapMask;
+            }
+            filterState[0] = lastSample;
+        }
+    }
 
 #if UNITY_EDITOR
     private void OnDrawGizmos()
