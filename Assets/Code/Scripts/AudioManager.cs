@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -9,10 +10,10 @@ using UnityEngine.Rendering;
 public class AudioManager : MonoBehaviour
 {
     [SerializeField]
-    readonly BVHManager bvhManager;
+    BVHManager bvhManager;
 
     Dictionary<int, AcousticSource> registeredAudioSources; //
-    Dictionary<int, AcousticSource> delayedAudioSources;
+    List<int> sourcesToRemove = new List<int>(32);
 
     ListenerController listener;
 
@@ -28,10 +29,11 @@ public class AudioManager : MonoBehaviour
     
     ComputeBuffer sourcesBuffer;
     ComputeBuffer pathBuffer;
+    ComputeBuffer pathCounter;
     ComputeBuffer debugBuffer;
     ComputeBuffer instancesBuffer;
 
-    readonly int maxPaths = 1;
+    readonly uint maxPaths = 1024;
 
     
     readonly List<int> removalBuffer = new();
@@ -43,15 +45,17 @@ public class AudioManager : MonoBehaviour
         listener = FindFirstObjectByType <ListenerController> ();
         
         registeredAudioSources = new Dictionary<int, AcousticSource>();
-        delayedAudioSources = new Dictionary<int, AcousticSource>();
-        
+                
         initRaysKernel = audioShader.FindKernel("InitRays");
         traceKernel = audioShader.FindKernel("TraceRays");
         
         // successful paths data
-        pathBuffer = new ComputeBuffer(maxPaths, Marshal.SizeOf(typeof(PathData)), ComputeBufferType.Append);
+        pathBuffer = new ComputeBuffer((int)maxPaths, Marshal.SizeOf(typeof(PathData)));
+        pathCounter = new ComputeBuffer(1, sizeof(uint), ComputeBufferType.Default);
         
         audioShader.SetBuffer(traceKernel, "pathBuffer", pathBuffer);
+        audioShader.SetBuffer(traceKernel, "pathCounter", pathCounter);
+
 
         //sources buffer
         sourcesBuffer = new ComputeBuffer(64, Marshal.SizeOf(typeof(SourceData)));
@@ -74,16 +78,6 @@ public class AudioManager : MonoBehaviour
         {
             SetupSourceBuffer(); 
         }
-
-        foreach (var delayedAudio in delayedAudioSources.Values)
-        {
-            if (Time.time >= delayedAudio.delayTime)
-            {
-                delayedAudio.audioSource.PlayOneShot(delayedAudio.audioSource.clip, delayedAudio.volume);
-                
-                removalBuffer.Add(delayedAudio.gameObject.GetInstanceID());
-            }
-        }
         
         //use async rather than getdata
         AsyncGPUReadback.Request(pathBuffer, OnPathDataReadback);
@@ -99,11 +93,9 @@ public class AudioManager : MonoBehaviour
         audioShader.SetBuffer(traceKernel, "tlasTree", bvhManager.GetBVHBuffer());
         
         //trace rays if there are audio sources
-        if (registeredAudioSources.Count != 0 || delayedAudioSources.Count != 0)
+        if (registeredAudioSources.Count != 0 )
         {
-            pathBuffer.SetCounterValue(0);
-        
-            audioShader.SetBuffer(traceKernel, "pathBuffer", pathBuffer);
+            pathCounter.SetData(new int[] { 0 });
         
             audioShader.Dispatch(traceKernel, initialRays / 64, 1, 1);
         }
@@ -119,6 +111,7 @@ public class AudioManager : MonoBehaviour
         debugBuffer?.Release();
         instancesBuffer?.Release();
         rayBuffer?.Release();
+        pathCounter?.Release();
     }
     
     void UpdateInstances()
@@ -137,57 +130,133 @@ public class AudioManager : MonoBehaviour
         instancesBuffer.SetData(instances);
     }
     
-    
-    
-    
-    
     void OnPathDataReadback(AsyncGPUReadbackRequest request)
     {
         if (request.hasError) return;
-
+        if (!pathCounter.IsValid()) return;
+        uint[] counterArray =  new uint[1];
+        
+        
+        pathCounter.GetData(counterArray);
+        
+        uint counter = counterArray[0] < maxPaths ? counterArray[0] : maxPaths;
+        
         var data = request.GetData<PathData>().ToArray();
 
-        ProcessAudioPaths(data);
+
+        ProcessAudioPaths(data, counter);
     }
 
-    void ProcessAudioPaths(PathData[] paths)
+    void ProcessAudioPaths(PathData[] paths, uint counter)
     {
-        foreach (var path in paths)
+        sourcesToRemove.Clear();
+        
+        //first we clean up this frames data
+        foreach (var audioSource in registeredAudioSources.Values)
         {
-            if (path.distance <= 0) continue;
+            audioSource.frameGain = 0f;
+            audioSource.frameDistance = float.MaxValue;
+        }
 
-            float delaySeconds = path.distance / 343.0f;
-            float pan = path.arrivalAngles.x; // -1 to 1
-            if(path.gain <= 0.1) continue; // we cannot hear this. discard it. Maybe discard it inside the tracer?
-            
-            // find the source from audioSources and probably do something with it.
-            if(registeredAudioSources.ContainsKey(path.sourceId))
+        // we accumulate per path the gain and the relevant data for each source
+        for (uint i = 0; i < counter; i++)
+        {
+            var path = paths[i];
+            if (registeredAudioSources.TryGetValue(path.sourceId, out var source))
             {
-                var source = registeredAudioSources[path.sourceId];
-                source.CalculateDistanceAttenuation(path.distance);
-                
-                // a sound with a delay > 0.1 will be added on the delayed sources dictionary and it will be triggered after the delay time has passed.
-                if (delaySeconds >= 0.1f)
-                {
-                    float delayTarget = source.timeOfEmission + delaySeconds;
+                source.frameGain += path.gain;
 
-                    // we are accounting for movement changes (does it work correctly though?)
-                    if (!Mathf.Approximately(delayTarget, source.delayTime))
-                    {
-                        source.delayTime = delayTarget;
-                    }
-                    
-                    // avoid duplicate entries
-                    delayedAudioSources.TryAdd(path.sourceId, source);
-                }
-                else
+                if (path.distance < source.frameDistance)
                 {
-                    source.audioSource.PlayOneShot(source.audioSource.clip, source.volume);
-                    registeredAudioSources.Remove(path.sourceId);
+                    source.frameDistance = path.distance;
                 }
             }
         }
+
+        // we apply this data to each source
+        foreach (var source in registeredAudioSources.Values)
+        {
+
+            bool isAudible = source.frameGain > 0.1f;
+
+            float delaySeconds = source.frameDistance / 343.0f;
+            float timeOfArrival = source.timeOfEmission + delaySeconds;
+            float elapsedTime = Time.time - timeOfArrival;
+            
+            if (isAudible)
+            {
+                source.CalculateFinalFrameVolume();
+
+                if (Time.time >= timeOfArrival)
+                {
+                    //the sound played but we never heard it
+                    if (!source.audioSource.loop && elapsedTime >= source.audioSource.clip.length)
+                    {
+                        sourcesToRemove.Add(source.gameObject.GetInstanceID());
+                        continue; 
+                    }
+                    
+                    if (!source.audioSource.isPlaying)
+                    {
+                    
+                        source.audioSource.time = elapsedTime % source.audioSource.clip.length;
+                        source.audioSource.Play();
+                    }
+                }
+            }
+            else
+            {
+                if (!source.audioSource.loop && elapsedTime >= source.audioSource.clip.length)
+                {
+                    sourcesToRemove.Add(source.gameObject.GetInstanceID());
+                }
+                
+                if (source.audioSource.isPlaying)
+                {
+                    source.audioSource.Stop();
+                }
+            }
+        }
+
     }
+
+    // for(uint i = 0; i < counter; i++)
+        // {
+        //     var path = paths[i];
+        //     
+        //     if (path.distance <= 0) continue;
+        //
+        //     
+        //     float pan = path.arrivalAngles.x; // -1 to 1
+        //     if(path.gain <= 0.1) continue; // we cannot hear this. discard it. Maybe discard it inside the tracer?
+        //     
+        //     // find the source from audioSources and probably do something with it.
+        //     if(registeredAudioSources.ContainsKey(path.sourceId))
+        //     {
+        //         var source = registeredAudioSources[path.sourceId];
+        //         source.CalculateDistanceAttenuation(path.distance);
+        //         
+        //         // a sound with a delay > 0.1 will be added on the delayed sources dictionary and it will be triggered after the delay time has passed.
+        //         if (delaySeconds >= 0.1f)
+        //         {
+        //             float delayTarget = source.timeOfEmission + delaySeconds;
+        //
+        //             // we are accounting for movement changes (does it work correctly though?)
+        //             if (!Mathf.Approximately(delayTarget, source.delayTime))
+        //             {
+        //                 source.delayTime = delayTarget;
+        //             }
+        //             
+        //             // avoid duplicate entries
+        //             delayedAudioSources.TryAdd(path.sourceId, source);
+        //         }
+        //         else
+        //         {
+        //             source.audioSource.PlayOneShot(source.audioSource.clip, source.volume);
+        //            // registeredAudioSources.Remove(path.sourceId);
+        //         }
+        //     }
+        // }
 
     //fix this ugly mess. 
     void SetupSourceBuffer()
@@ -200,7 +269,9 @@ public class AudioManager : MonoBehaviour
                 sourceDataArray[i] = new SourceData()
                 {
                     origin = values[i].transform.position,
-                    sourceId = values[i].gameObject.GetInstanceID()
+                    sourceId = values[i].gameObject.GetInstanceID(),
+                    radius = values[i].radius,
+                    padding = Vector3.zero
                 };
             }
 
@@ -216,12 +287,10 @@ public class AudioManager : MonoBehaviour
 
     private void CleanSounds()
     {
-        for (int i = 0; i < removalBuffer.Count; i++)
+        for (int i = 0; i < sourcesToRemove.Count; i++)
         {
-            delayedAudioSources.Remove(removalBuffer[i]);
+            registeredAudioSources.Remove(sourcesToRemove[i]);
         }
-        removalBuffer.Clear();
-
     }
     
     

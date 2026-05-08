@@ -22,9 +22,10 @@ namespace Code.Data
     public struct SourceData
     {
         public Vector3 origin;
-    
+        public float radius;
         public int sourceId;
-    };
+        public Vector3 padding;
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct DebugInfo

@@ -3,6 +3,7 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 public class AcousticSource : MonoBehaviour
 {
@@ -11,8 +12,8 @@ public class AcousticSource : MonoBehaviour
 
     [Tooltip("Faint = 0-40 average: ~20 \r\nNormal = 41-75 average: ~58\r\nLoud = 76-100 average: ~88  \r\nExtreme = 101-120 average: ~110")]
     public AcousticProfile profile;
-    [Tooltip("Can be used to fine-tune the profile.\nCaution if the values are far from the profile you are effectively overriding the profile\nDefault is 0")]
-    public float manualDb = 0f;
+    [FormerlySerializedAs("manualDb")] [Tooltip("Can be used to fine-tune the profile.\nCaution if the values are far from the profile you are effectively overriding the profile\nDefault is 0")]
+    public float sourceDb = 0f;
 
     readonly float sortingGain;
 
@@ -25,6 +26,9 @@ public class AcousticSource : MonoBehaviour
     public bool isDelayed = false;
     public float delayTime = 0;
     public float timeOfEmission = 0;
+
+    public float radius;
+    
     
     private NativeArray<float> historyBuffer;
     private NativeArray<int> state; // [0] writeIndex, [1] wrapMask
@@ -36,6 +40,11 @@ public class AcousticSource : MonoBehaviour
     
     private int cachedSampleRate;
     
+    public float frameGain;
+    public float frameDistance;
+    private float maxAudibleDistance;
+    private float minAudibleDistance;
+
     //getter for sortingGain
     public float GetSortingGain()
     {
@@ -46,16 +55,21 @@ public class AcousticSource : MonoBehaviour
     void Start()
     {
         cachedSampleRate = AudioSettings.outputSampleRate;
-        float finalDb = (manualDb > 0) ? manualDb : profile.dbLevel;
+        sourceDb = (sourceDb > 0) ? sourceDb : profile.dbLevel;
 
         // Calculate once and store
-        baseAmplitude = Mathf.Pow(10f, (finalDb - 60f) / 20f);
+        baseAmplitude = Mathf.Pow(10f, (sourceDb - 60f) / 20f);
         baseAmplitudeWeighted = baseAmplitude * profile.acousticWeight;
+        
+        CalculateDistances();
         
         audioSource = gameObject.AddComponent<AudioSource>();
         audioSource.clip = audioClip;
         audioSource.volume = volume;
         audioSource.playOnAwake = false;
+
+        var collider = gameObject.GetComponent<SphereCollider>();
+        radius = collider ? collider.radius : 1f;
 
         int historySize = 131072; // 2 seconds at 44.8khz
         historyBuffer = new NativeArray<float>(historySize, Allocator.Persistent);
@@ -78,13 +92,7 @@ public class AcousticSource : MonoBehaviour
         float d2 = (transform.position - listenerPos).sqrMagnitude;
         return baseAmplitudeWeighted / Mathf.Max(1f, d2);
     }
-
-    public void Update()
-    {
-        if (!audioSource) return;
-        audioSource.volume = volume;
-    }
-
+    
     private float DistanceAttenuation(float distance, float referenceDistance, float falloffFactor)
     {
         distance = Mathf.Max(distance, referenceDistance);
@@ -96,7 +104,54 @@ public class AcousticSource : MonoBehaviour
     {
         attenuation = baseAmplitude * 1f / (1f + distance); // * DistanceAttenuation(distance, 1f, 1f);
         volume = attenuation;
+        
+    }  
+    
+    public void CalculateFinalFrameVolume()
+    {
+        float attenuation = 0.0f;
+
+        if (frameDistance >= maxAudibleDistance)
+        {
+            volume = 0.0f;
+            return;
+        }
+
+        if (frameDistance <= minAudibleDistance)
+        {
+            volume = Mathf.Clamp01(frameGain);
+            return;
+        }
+
+        // falloff... maybe use distance squared?
+        attenuation = minAudibleDistance / frameDistance;
+
+        float distanceRatio = (frameDistance - minAudibleDistance) / (maxAudibleDistance - minAudibleDistance);
+        attenuation *= (1f - distanceRatio); 
+
+        volume = Mathf.Clamp01(Mathf.Clamp01(attenuation) * frameGain);
+        
+        audioSource.volume = volume;
+
     }
+    
+    private void CalculateDistances()
+    {
+        if (sourceDb <= 20f) 
+        {
+            minAudibleDistance = 0.1f;
+            maxAudibleDistance = 0.1f;
+            return;
+        }
+        
+        float dbDifferenceFromBaseline = sourceDb - 60f;
+    
+        minAudibleDistance = 1.0f * Mathf.Pow(10f, dbDifferenceFromBaseline / 20f);
+
+        float dbDropNeeded = sourceDb - 20f;
+        maxAudibleDistance = minAudibleDistance * Mathf.Pow(10f, dbDropNeeded / 20f);
+    }
+    
 
     public void RegisterSound()
     {
@@ -108,54 +163,54 @@ public class AcousticSource : MonoBehaviour
         }
     }
 
-    void OnAudioFilterRead(float[] data, int channels)
-    {
-        int writeIndex = state[0];
-        int wrapMask = state[1];
-
-        // data.Length is 1024 for Mono, 2048 for Stereo. 
-        // frameCount is always the true number of time slices (e.g., 1024).
-        int frameCount = data.Length / channels;
-
-        for (int i = 0; i < frameCount; i++)
-        {
-            // as the stereo doesnt matter here, we average left-right
-            float monoSample = (channels == 2) 
-                ? (data[i * 2] + data[i * 2 + 1]) * 0.5f 
-                : data[i];
-
-            historyBuffer[writeIndex] = monoSample;
-            writeIndex = (writeIndex + 1) & wrapMask;
-        }
-
-        state[0] = writeIndex;
-        
-        NativeArray<float> tempOutput = new NativeArray<float>(data.Length, Allocator.TempJob);
-        
-        ReadEchoJob echoJob = new ReadEchoJob
-        {
-            historyBuffer = historyBuffer,
-            outputBlock = tempOutput,
-            writeIndex = state[0], 
-            wrapMask = state[1],
-            channels = channels,
-            delayMs = echoDelay,
-            sampleRate = cachedSampleRate,
-            attenuation = 1.0f,
-            filterCoefficient = 1.0f,
-            filterState = filterState
-        };
-        
-        JobHandle handle = echoJob.Schedule();
-        handle.Complete();
-        
-        for (int i = 0; i < data.Length; i++)
-        {
-            data[i] += tempOutput[i];
-        }
-        
-        tempOutput.Dispose();
-    }
+    // void OnAudioFilterRead(float[] data, int channels)
+    // {
+    //     int writeIndex = state[0];
+    //     int wrapMask = state[1];
+    //
+    //     // data.Length is 1024 for Mono, 2048 for Stereo. 
+    //     // frameCount is always the true number of time slices (e.g., 1024).
+    //     int frameCount = data.Length / channels;
+    //
+    //     for (int i = 0; i < frameCount; i++)
+    //     {
+    //         // as the stereo doesnt matter here, we average left-right
+    //         float monoSample = (channels == 2) 
+    //             ? (data[i * 2] + data[i * 2 + 1]) * 0.5f 
+    //             : data[i];
+    //
+    //         historyBuffer[writeIndex] = monoSample;
+    //         writeIndex = (writeIndex + 1) & wrapMask;
+    //     }
+    //
+    //     state[0] = writeIndex;
+    //     
+    //     NativeArray<float> tempOutput = new NativeArray<float>(data.Length, Allocator.TempJob);
+    //     
+    //     ReadEchoJob echoJob = new ReadEchoJob
+    //     {
+    //         historyBuffer = historyBuffer,
+    //         outputBlock = tempOutput,
+    //         writeIndex = state[0], 
+    //         wrapMask = state[1],
+    //         channels = channels,
+    //         delayMs = echoDelay,
+    //         sampleRate = cachedSampleRate,
+    //         attenuation = 1.0f,
+    //         filterCoefficient = 1.0f,
+    //         filterState = filterState
+    //     };
+    //     
+    //     JobHandle handle = echoJob.Schedule();
+    //     handle.Complete();
+    //     
+    //     for (int i = 0; i < data.Length; i++)
+    //     {
+    //         data[i] += tempOutput[i];
+    //     }
+    //     
+    //     tempOutput.Dispose();
+    // }
 
 
     [BurstCompile]
@@ -209,7 +264,7 @@ public class AcousticSource : MonoBehaviour
     {
         if (profile == null) return;
 
-        float activeDb = (manualDb > 0f) ? manualDb : profile.dbLevel;
+        float activeDb = (sourceDb > 0f) ? sourceDb : profile.dbLevel;
         float relativeVolume = Mathf.InverseLerp(0f, 120f, activeDb);
         Color baseColor = Color.Lerp(Color.cyan, Color.red, relativeVolume);
 
