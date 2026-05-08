@@ -3,7 +3,6 @@ using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 public class AcousticSource : MonoBehaviour
 {
@@ -14,8 +13,8 @@ public class AcousticSource : MonoBehaviour
     public AcousticProfile profile;
     [Tooltip("Can be used to fine-tune the profile.\nCaution if the values are far from the profile you are effectively overriding the profile\nDefault is 0")]
     public float manualDb = 0f;
-    
-    float sortingGain;
+
+    readonly float sortingGain;
 
     private float baseAmplitude;
     private float attenuation;
@@ -58,7 +57,7 @@ public class AcousticSource : MonoBehaviour
         audioSource.volume = volume;
         audioSource.playOnAwake = false;
 
-        int historySize = 131072;
+        int historySize = 131072; // 2 seconds at 44.8khz
         historyBuffer = new NativeArray<float>(historySize, Allocator.Persistent);
         state = new NativeArray<int>(2, Allocator.Persistent);
         state[0] = 0; // writeIndex
@@ -95,7 +94,7 @@ public class AcousticSource : MonoBehaviour
 
     public void CalculateDistanceAttenuation(float distance)
     {
-        attenuation = baseAmplitude * 1f / (1f + distance);// * DistanceAttenuation(distance, 1f, 1f);
+        attenuation = baseAmplitude * 1f / (1f + distance); // * DistanceAttenuation(distance, 1f, 1f);
         volume = attenuation;
     }
 
@@ -239,12 +238,11 @@ public class AcousticSource : MonoBehaviour
             $"{activeDb:F1} dB | Weight: {profile.acousticWeight:F2}"
         );
 
-        GUIStyle style = new GUIStyle { fontSize = 12 };
+        GUIStyle style = new() { fontSize = 12 };
         style.normal.textColor = Gizmos.color;
 
         Vector3 midPoint = Vector3.Lerp(start, end, 0.5f);
         UnityEditor.Handles.Label(midPoint, $"Perceived: {perceivedDb:F1} dB", style);
     }
+    #endif
 }
-#endif
-
