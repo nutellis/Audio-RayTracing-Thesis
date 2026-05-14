@@ -34,7 +34,12 @@ public class AcousticObject : AcousticBase
                    absorption5 = acousticMaterial.absorptionCoefficients[5],
                 
                    scattering = acousticMaterial.scattering,
-                   padding = 0.0f
+                   
+                   transmission0 = acousticMaterial.transmissionCoefficients[0],
+                   transmission1 = acousticMaterial.transmissionCoefficients[1],
+                   transmission2 = acousticMaterial.transmissionCoefficients[2],
+                   
+                   padding = new float2(0.0f, 0.0f)
                };
                ObjectRegistry<MaterialData>.Instance.RegisterObject(acousticMaterial.materialID, material);
            }

@@ -131,8 +131,14 @@ namespace Code.Data
         public float absorption4;
         public float absorption5;
 
+        public float transmission0;
+        public float transmission1;
+        public float transmission2;
+        
         public float scattering;
-        public float padding;
+
+        public float2 padding;
+        
         
         public float GetAbsorption(int bandIndex)
         {

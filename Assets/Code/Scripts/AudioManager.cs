@@ -12,8 +12,7 @@ using UnityEngine.Rendering;
 
 public class AudioManager : MonoBehaviour
 {
-    [SerializeField]
-    BVHManager bvhManager;
+    [SerializeField] BVHManager bvhManager;
 
     Dictionary<int, AcousticSource> registeredAudioSources; //
     List<int> sourcesToRemove = new List<int>(32);
@@ -26,9 +25,9 @@ public class AudioManager : MonoBehaviour
     int traceKernel;
     int resetCounterKernel;
     public ComputeShader audioShader;
-    
+
     public int initialRays = 1024000;
-    
+
     ComputeBuffer rayBuffer;
     ComputeBuffer sourcesBuffer;
     ComputeBuffer pathBuffer;
@@ -52,21 +51,21 @@ public class AudioManager : MonoBehaviour
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        listener = FindFirstObjectByType <ListenerController> ();
-        
+        listener = FindFirstObjectByType<ListenerController>();
+
         registeredAudioSources = new Dictionary<int, AcousticSource>();
-                
+
         initRaysKernel = audioShader.FindKernel("InitRays");
         traceKernel = audioShader.FindKernel("TraceRays");
         resetCounterKernel = audioShader.FindKernel("ResetCounter");
-        
+
         // successful paths data
         pathBuffer = new ComputeBuffer((int)maxPaths, Marshal.SizeOf(typeof(PathData)));
         pathCounterBuffer = new ComputeBuffer(1, sizeof(uint), ComputeBufferType.Default);
-        
+
         audioShader.SetBuffer(traceKernel, "pathBuffer", pathBuffer);
         audioShader.SetBuffer(traceKernel, "pathCounter", pathCounterBuffer);
-        
+
         audioShader.SetBuffer(resetCounterKernel, "pathCounter", pathCounterBuffer);
 
 
@@ -74,39 +73,39 @@ public class AudioManager : MonoBehaviour
         sourcesBuffer = new ComputeBuffer(64, Marshal.SizeOf(typeof(SourceData)));
 
         audioShader.SetBuffer(traceKernel, "sources", sourcesBuffer);
-        
+
         debugBuffer = new ComputeBuffer(1, Marshal.SizeOf(typeof(DebugInfo)));
         audioShader.SetBuffer(traceKernel, "debugInfo", debugBuffer);
-        
+
         audioShader.SetBuffer(traceKernel, "triangleSoup", bvhManager.GetTrianglesBuffer());
         audioShader.SetBuffer(traceKernel, "blasTrees", bvhManager.GetBlasNodesBuffer());
-        
+
         UpdateMaterialsAndInstances();
-        
+
         //filter init
         filterCoefficients = new FilterCoefficients[6];
-       
+
         for (int i = 0; i < 6; i++)
         {
             bandwidth = centerFreqs[i] * thirdOctaveFactor;
             filterCoefficients[i] = CreateBandPass(centerFreqs[i], bandwidth, AudioSettings.outputSampleRate);
         }
-        
+
         InitializeRays(initialRays);
     }
 
     private void LateUpdate()
     {
         UpdateListenerData();
-        
+
         //maybe skip calling it every frame if we are not adding or removing objects
         UpdateMaterialsAndInstances();
-        
+
         //update the tree
         bvhManager.UpdateBVH();
         audioShader.SetBuffer(traceKernel, "tlasTree", bvhManager.GetBVHBuffer());
 
-        if(isTracing && pathCounterRequest.done && pathDataRequest.done)
+        if (isTracing && pathCounterRequest.done && pathDataRequest.done)
         {
             isTracing = false;
             if (!pathCounterRequest.hasError && !pathDataRequest.hasError)
@@ -116,9 +115,8 @@ public class AudioManager : MonoBehaviour
 
                 PathData[] paths = new PathData[maxPaths];
                 pathDataRequest.GetData<PathData>().CopyTo(paths);
-                
+
                 ProcessAudioPaths(paths, count);
-                
             }
         }
 
@@ -126,18 +124,17 @@ public class AudioManager : MonoBehaviour
         if (registeredAudioSources.Count > 0 && isTracing == false)
         {
             isTracing = true;
-            
-            SetupSourceBuffer(); 
-            
+
+            SetupSourceBuffer();
+
             audioShader.Dispatch(resetCounterKernel, 1, 1, 1);
-            
+
             audioShader.Dispatch(traceKernel, initialRays / 64, 1, 1);
-            
+
             pathCounterRequest = AsyncGPUReadback.Request(pathCounterBuffer);
             pathDataRequest = AsyncGPUReadback.Request(pathBuffer);
-
         }
-        
+
         // "garbage collect" delayed sounds
         CleanSounds();
     }
@@ -152,10 +149,9 @@ public class AudioManager : MonoBehaviour
         rayBuffer?.Release();
         pathCounterBuffer?.Release();
     }
-    
+
     void UpdateMaterialsAndInstances()
     {
-        
         //materials
         var materials = ObjectRegistry<MaterialData>.Instance.GetValues();
 
@@ -165,6 +161,7 @@ public class AudioManager : MonoBehaviour
             materialsBuffer = new ComputeBuffer(materials.Length, Marshal.SizeOf(typeof(MaterialData)));
             audioShader.SetBuffer(traceKernel, "materials", materialsBuffer);
         }
+
         materialsBuffer.SetData(materials);
 
         var instances = ObjectRegistry<Instance>.Instance.GetValues();
@@ -173,13 +170,13 @@ public class AudioManager : MonoBehaviour
         {
             instancesBuffer?.Release();
             instancesBuffer = new ComputeBuffer(instances.Length, Marshal.SizeOf(typeof(Instance)));
-            
+
             audioShader.SetBuffer(traceKernel, "objectInstances", instancesBuffer);
         }
 
         instancesBuffer.SetData(instances);
     }
-    
+
     static readonly ProfilerMarker processFrameMarker = new("Acoustic.ProcessAudioPaths");
 
 
@@ -194,7 +191,7 @@ public class AudioManager : MonoBehaviour
                 audioSource.frameGain = 0f;
                 audioSource.frameDistance = float.MaxValue;
             }
-            
+
             Dictionary<int, List<PathData>> pathsBySource = new Dictionary<int, List<PathData>>();
 
             for (int i = 0; i < counter; i++)
@@ -205,8 +202,9 @@ public class AudioManager : MonoBehaviour
                     list = new List<PathData>();
                     pathsBySource[path.sourceId] = list;
                 }
+
                 list.Add(path);
-                
+
                 // we accumulate per path the gain and the relevant data for each source
                 if (registeredAudioSources.TryGetValue(path.sourceId, out var source))
                 {
@@ -221,8 +219,7 @@ public class AudioManager : MonoBehaviour
             // we apply this data to each source
             foreach (var source in registeredAudioSources.Values)
             {
-                source.frameGain /= initialRays;
-                bool isAudible = source.frameGain > 0.001f;
+                bool isAudible = source.frameGain/initialRays > 0.001f;
 
                 float delaySeconds = source.frameDistance / 343.0f;
                 float timeOfArrival = source.timeOfEmission + delaySeconds;
@@ -241,7 +238,7 @@ public class AudioManager : MonoBehaviour
                         var emptyList = Array.Empty<PathData>();
                         source.UpdateReflections(emptyList);
                     }
-                    
+
                     if (Time.time >= timeOfArrival)
                     {
                         //the sound played
@@ -277,26 +274,26 @@ public class AudioManager : MonoBehaviour
     //fix this ugly mess. 
     void SetupSourceBuffer()
     {
-            // it can be done better...
-            SourceData[] sourceDataArray = new SourceData[registeredAudioSources.Count];
-            var values = registeredAudioSources.Values.ToArray();
-            for(int i = 0; i < values.Length; i++)
+        // it can be done better...
+        SourceData[] sourceDataArray = new SourceData[registeredAudioSources.Count];
+        var values = registeredAudioSources.Values.ToArray();
+        for (int i = 0; i < values.Length; i++)
+        {
+            sourceDataArray[i] = new SourceData()
             {
-                sourceDataArray[i] = new SourceData()
-                {
-                    origin = values[i].transform.position,
-                    sourceId = values[i].gameObject.GetInstanceID(),
-                    radius = values[i].radius,
-                    maxAudibleDistance = values[i].maxAudibleDistance,
-                    minAudibleDistance = values[i].minAudibleDistance,
-                    power = values[i].baseAmplitudeWeighted
-                };
-            }
+                origin = values[i].transform.position,
+                sourceId = values[i].gameObject.GetInstanceID(),
+                radius = values[i].radius,
+                maxAudibleDistance = values[i].maxAudibleDistance,
+                minAudibleDistance = values[i].minAudibleDistance,
+                power = values[i].baseAmplitudeWeighted
+            };
+        }
 
-            sourcesBuffer.SetData(sourceDataArray);
-            audioShader.SetInt("sourceCount", sourceDataArray.Length);
+        sourcesBuffer.SetData(sourceDataArray);
+        audioShader.SetInt("sourceCount", sourceDataArray.Length);
     }
-    
+
     //this is to know if a source needs to taken into consideration
     public void RegisterAudio(AcousticSource acousticSource)
     {
@@ -310,15 +307,16 @@ public class AudioManager : MonoBehaviour
             registeredAudioSources[sourcesToRemove[i]].UnRegisterSound();
             registeredAudioSources.Remove(sourcesToRemove[i]);
         }
+
         sourcesToRemove.Clear();
     }
-    
-    
+
+
     // RAY INITIALIZATION
     public void InitializeRays(int initialRays)
     {
         UpdateListenerData();
-        
+
         SetupComputeBuffers(initialRays);
 
         int groups = Mathf.CeilToInt(initialRays / 64f);
@@ -340,11 +338,11 @@ public class AudioManager : MonoBehaviour
     void SetupComputeBuffers(int initialRays)
     {
         rayBuffer = new ComputeBuffer(initialRays, Marshal.SizeOf(typeof(Ray)));
-        
+
         audioShader.SetBuffer(initRaysKernel, "rayBuffer", rayBuffer);
         audioShader.SetBuffer(traceKernel, "rayBuffer", rayBuffer);
     }
-    
+
     public static FilterCoefficients CreateBandPass(float freq, float bw, float sampleRate)
     {
         double pid_sr = math.PI / sampleRate;
@@ -354,7 +352,7 @@ public class AudioManager : MonoBehaviour
         double d = 2.0 * math.cos(tpid_sr * (double)freq);
 
         float b0 = (float)(1.0 / (1.0 + c));
-        
+
         return new FilterCoefficients
         {
             a1 = b0,
@@ -364,10 +362,9 @@ public class AudioManager : MonoBehaviour
             a5 = (float)((c - 1.0) * b0)
         };
     }
-    
+
     public FilterCoefficients[] GetFilterCoefficients()
     {
         return filterCoefficients;
     }
 }
-

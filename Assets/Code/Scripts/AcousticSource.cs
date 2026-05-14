@@ -173,7 +173,7 @@ public class AcousticSource : MonoBehaviour
         int writeIndex = (activeBufferIndex + 1) % 2;
         int validReflections = 0;
 
-        float rayEnergyScalar = (1.0f / 2048); //* 5000;
+        float rayEnergyScalar = 1.0f; //(1.0f / 2048); //* 5000;
         
         // Consider moving these to Start() or class level variables (Haas Effect)
         int mergeThresholdSamples = (int)(0.0025f * cachedSampleRate); 
@@ -324,15 +324,21 @@ public class AcousticSource : MonoBehaviour
             float wetGain = 1.0f; // adjust this to taste
             reflectionAccumulator *= wetGain;
              
-            // reflectionAccumulator /= (1.0f + math.abs(reflectionAccumulator));
+            reflectionAccumulator /= (1.0f + math.abs(reflectionAccumulator));
         
             for (int c = 0; c < channels; c++)
             {
                 float dry = data[i * channels + c] * directGain;
         
-                float combined = reflectionAccumulator; // +
-        
-                data[i * channels + c] = math.clamp(combined, -1.0f, 1.0f);
+                float combined = dry + reflectionAccumulator; // +
+                if (combined > 1.0 || combined < -1.0)
+                {
+                    data[i * channels + c] = 0;
+                }
+                else
+                {
+                    data[i * channels + c] = math.clamp(combined, -1.0f, 1.0f);
+                }
             }
             writeIndex = (writeIndex + 1) & wrapMask;
         }

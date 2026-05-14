@@ -158,8 +158,11 @@ RWStructuredBuffer<int> pathCounter;
 struct MaterialData
 {
     float absorption[6];
+
+    float transmission[3]
+    ;
     float scattering;
-    float padding; 
+    float2 padding; 
 };
 StructuredBuffer<MaterialData> materials;
 
@@ -394,7 +397,7 @@ bool IntersectAny(float3 origin, float3 direction, float maxDistance, int2 ignor
                 float localMaxDistance = maxDistance * worldToLocalScale;
                 float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
                 
-                if (blasDistance >= maxDistance) continue;
+                if (blasDistance >= localMaxDistance) continue;
                 
                 if (blasNode.triCount > 0)
                 {
@@ -435,6 +438,89 @@ float IntersectSphere(float3 rayOrigin, float3 rayDir, float3 sphereCenter, floa
     return -b - sqrt(h);
 }
 
+void Transmit(float3 origin, float3 direction, float maxDistance, int sourceId, inout float survived[3] )
+{
+    int stack[32];
+    int stackCounter = 0;
+    
+    stack[stackCounter++] = 0;
+    float3 invDir = 1.0 / direction;
+    
+    while (stackCounter > 0)
+    {
+        uint nodeIdx = stack[--stackCounter];
+        TlasNode node = tlasTree[nodeIdx];
+        
+        float distance = IntersectAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
+        
+        if (distance >= maxDistance) continue;
+        
+        if ( node.primitiveIndex != -1)
+        {
+            ObjInstance instance = objectInstances[node.primitiveIndex];
+            if (instance.objectId == sourceId)  continue;
+
+            // move the ray into the blas local space
+            float3 localOrigin = mul(instance.worldToLocal, float4(origin, 1.0)).xyz;
+            float3 localDirection = mul(instance.worldToLocal, float4(direction, 0.0)).xyz;
+            float worldToLocalScale = length(localDirection);
+            localDirection /= worldToLocalScale;
+            float3 invLocalDirection = 1.0 / localDirection;
+            
+            int blasStack[32];
+            int blasStackCounter = 0;
+    
+            blasStack[blasStackCounter++] = instance.blasOffset;
+            while (blasStackCounter > 0)
+            {
+                uint blasNodeIdx = blasStack[--blasStackCounter];
+                BlasNode blasNode = blasTrees[blasNodeIdx];
+        
+                float localMaxDistance = maxDistance * worldToLocalScale;
+                float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
+                
+                if (blasDistance >= localMaxDistance) continue;
+                
+                if (blasNode.triCount > 0)
+                {
+                    for (int i = 0; i < blasNode.triCount; i++)
+                    {
+                        Triangle tri = triangleSoup[instance.trianglesOffset + blasNode.leftFirst + i];
+                        float dist = IntersectTriangle(localOrigin, localDirection, tri);
+                        float worldDist = dist / worldToLocalScale;
+                        
+                        if (worldDist > 0.001 && worldDist < maxDistance)
+                        {
+                            MaterialData mat = materials[instance.materialId];
+                            float maxSurv = 0.0;
+                            
+                                survived[0] *= mat.transmission[0];
+                                survived[1] *= mat.transmission[1];
+                                survived[2] *= mat.transmission[2];
+
+                            maxSurv = max(maxSurv, max(survived[0], max(survived[1], survived[2])));
+                            
+                            if (maxSurv < 0.01) return; 
+                        }
+                    }
+                }
+                else
+                {
+                    blasStack[blasStackCounter++] = instance.blasOffset + blasNode.leftFirst;
+                    blasStack[blasStackCounter++] = instance.blasOffset + blasNode.leftFirst + 1;
+                }
+            }
+        }
+        else
+        {
+            // we hit an internal node, so we need to push its children to the stack
+            stack[stackCounter++] = node.leftChild;
+            stack[stackCounter++] = node.rightChild;
+        }
+    }
+}
+
+
 
 [numthreads(64,1,1)]
 void TraceRays(uint3 id : SV_DispatchThreadID)
@@ -471,8 +557,11 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
             float3 dir = toSource / dist;
             
             // Check if path to a sound source is clear
-            if (!IntersectAny(listenerPosition.xyz, dir, dist, int2(source.sourceId, listenerId)))
-            {
+            //if (!IntersectAny(listenerPosition.xyz, dir, dist, int2(source.sourceId, listenerId)))
+            float transmitted[3] = {1.0, 1.0, 1.0};
+            Transmit(listenerPosition.xyz, dir, dist, source.sourceId, transmitted);
+            float maxSurvived = max(transmitted[0], max(transmitted[1], transmitted[2]));
+            if (maxSurvived > 0.01) {
                 PathData directPath;
                 directPath.distance = dist;
                 
@@ -576,7 +665,14 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
                 float3 dirToSource = toSource / distToSource;
 
                 float3 shadowOrigin = hitPoint + hit.surfaceNormal * 0.001;
-                if (!IntersectAny(shadowOrigin, dirToSource, distToSource, int2(source.sourceId, hit.objectId)))
+                float transmitted[3] = {1.0, 1.0, 1.0};
+
+                
+                Transmit(shadowOrigin, dirToSource, distToSource, source.sourceId, transmitted);
+                
+                float maxSurvived = max(transmitted[0], max(transmitted[1], transmitted[2]));
+                // if (!IntersectAny(shadowOrigin, dirToSource, distToSource, int2(source.sourceId, -1)))
+                if (maxSurvived > 0.01)
                 {
                     uint index;
                     InterlockedAdd(pathCounter[0], 1, index);
@@ -591,13 +687,13 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
                         
                         float gain = source.power * (d_min / max(d_min, pathDist));
 
-                        // Apply material absorption/scattering on top of this gain
-                        path.energy0 = energy[0] * (1.0 - mat.absorption[0]) * mat.scattering * gain;
-                        path.energy1 = energy[1] * (1.0 - mat.absorption[1]) * mat.scattering * gain;
-                        path.energy2 = energy[2] * (1.0 - mat.absorption[2]) * mat.scattering * gain;
-                        path.energy3 = energy[3] * (1.0 - mat.absorption[3]) * mat.scattering * gain;
-                        path.energy4 = energy[4] * (1.0 - mat.absorption[4]) * mat.scattering * gain;
-                        path.energy5 = energy[5] * (1.0 - mat.absorption[5]) * mat.scattering * gain;
+                        // Apply material absorption/scattering on top of this gain, also transmission
+                        path.energy0 = energy[0] * (1.0 - mat.absorption[0]) * mat.scattering * gain * transmitted[0];
+                        path.energy1 = energy[1] * (1.0 - mat.absorption[1]) * mat.scattering * gain * transmitted[0];
+                        path.energy2 = energy[2] * (1.0 - mat.absorption[2]) * mat.scattering * gain * transmitted[1];
+                        path.energy3 = energy[3] * (1.0 - mat.absorption[3]) * mat.scattering * gain * transmitted[1];
+                        path.energy4 = energy[4] * (1.0 - mat.absorption[4]) * mat.scattering * gain * transmitted[2];
+                        path.energy5 = energy[5] * (1.0 - mat.absorption[5]) * mat.scattering * gain * transmitted[2];
                     
                         path.sourceId = sources[i].sourceId;
                         path.arrivalAngles = arrivalAngles;
