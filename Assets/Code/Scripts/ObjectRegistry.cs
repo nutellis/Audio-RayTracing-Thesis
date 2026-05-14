@@ -56,4 +56,21 @@ public class ObjectRegistry<T>
         registry.Values.CopyTo(values, 0);
         return values;
     }
+
+    public bool TryGetValue(int key, out T value)
+    {
+        return registry.TryGetValue(key, out value);
+    }
+
+    public int GetIndexOf(int key)
+    {   
+        for(int i = 0; i < registry.Count; ++i)
+        {
+            var keys = new int[registry.Count];
+            registry.Keys.CopyTo(keys, 0);
+            if(keys[i] == key) return i;
+        }
+        return -1;
+    }
+    
 }

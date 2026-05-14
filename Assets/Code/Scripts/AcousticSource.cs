@@ -1,13 +1,15 @@
 using System;
+using Code.Data;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
+using Unity.Mathematics;
 using UnityEngine;
+
 using UnityEngine.Serialization;
 
 public class AcousticSource : MonoBehaviour
 {
-    public AudioClip audioClip;
     public AudioSource audioSource;
 
     [Tooltip("Faint = 0-40 average: ~20 \r\nNormal = 41-75 average: ~58\r\nLoud = 76-100 average: ~88  \r\nExtreme = 101-120 average: ~110")]
@@ -19,73 +21,98 @@ public class AcousticSource : MonoBehaviour
 
     private float baseAmplitude;
     private float attenuation;
-    private float baseAmplitudeWeighted;
+    public float baseAmplitudeWeighted;
 
-    public float volume = 0;
     
-    public bool isDelayed = false;
-    public float delayTime = 0;
+    
     public float timeOfEmission = 0;
 
     public float radius;
     
     
-    private NativeArray<float> historyBuffer;
-    private NativeArray<int> state; // [0] writeIndex, [1] wrapMask
-    
-    private NativeArray<float> filterState;
-    private NativeArray<float> outputBlock;
-
-    private float echoDelay = 2000;
+    private float[] historyBuffer;
+    private int[] state; // [0] writeIndex, [1] wrapMask
     
     private int cachedSampleRate;
     
     public float frameGain;
     public float frameDistance;
-    private float maxAudibleDistance;
-    private float minAudibleDistance;
+    
+    public float maxAudibleDistance;
+    public float minAudibleDistance;
+    
+    public float directGain = 0;
+    // echo and reflections 
+    private const int MAX_REFLECTIONS_PER_SOURCE = 64; 
+    private Reflection[][] reflectionBuffers;
+    private volatile int activeBufferIndex = 0;
+    private int activeReflectionCount = 0;
 
+
+    // filter related
+    private FilterState[] filterStates;
+    private FilterCoefficients[] cachedCoefficients;
+    
+    
     //getter for sortingGain
     public float GetSortingGain()
     {
         return sortingGain;
     }
 
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
-    void Start()
+    private void OnEnable()
+    {
+        Initialize();
+    }
+
+    private void OnDisable()
+    {
+        Dispose();
+    }
+
+    private void OnDestroy()
+    {
+        Dispose();
+    }
+
+    private void Initialize()
     {
         cachedSampleRate = AudioSettings.outputSampleRate;
         sourceDb = (sourceDb > 0) ? sourceDb : profile.dbLevel;
 
         // Calculate once and store
-        baseAmplitude = Mathf.Pow(10f, (sourceDb - 60f) / 20f);
+        baseAmplitude = math.pow(10f, (sourceDb - 60f) / 20f);
         baseAmplitudeWeighted = baseAmplitude * profile.acousticWeight;
         
         CalculateDistances();
-        
-        audioSource = gameObject.AddComponent<AudioSource>();
-        audioSource.clip = audioClip;
-        audioSource.volume = volume;
-        audioSource.playOnAwake = false;
 
         var collider = gameObject.GetComponent<SphereCollider>();
         radius = collider ? collider.radius : 1f;
 
         int historySize = 131072; // 2 seconds at 44.8khz
-        historyBuffer = new NativeArray<float>(historySize, Allocator.Persistent);
-        state = new NativeArray<int>(2, Allocator.Persistent);
+        historyBuffer = new float[historySize];
+        state = new int [2];
         state[0] = 0; // writeIndex
         state[1] = historySize - 1; // wrapMask
         
-        filterState = new NativeArray<float>(1, Allocator.Persistent);
-        filterState[0] = 0;
-    }
+        reflectionBuffers = new Reflection[2][];
+        reflectionBuffers[0] = new Reflection[MAX_REFLECTIONS_PER_SOURCE];
+        reflectionBuffers[1] = new Reflection[MAX_REFLECTIONS_PER_SOURCE];
 
-    private void OnDestroy()
-    {
-        if (historyBuffer.IsCreated) historyBuffer.Dispose();
-        if (state.IsCreated) state.Dispose();
+        //filter related
+        
+        // 64 reflections x 6 bands = 384 filter states
+        filterStates = new FilterState[384];
     }
+    
+    private void Dispose()
+    {  
+            historyBuffer = null;
+            reflectionBuffers[0] = null;
+            reflectionBuffers[1] = null;
+            filterStates = null;
+    }
+    
 
     public float GetScore(Vector3 listenerPos)
     {
@@ -99,41 +126,7 @@ public class AcousticSource : MonoBehaviour
         float gain = referenceDistance / (referenceDistance + falloffFactor * (distance - referenceDistance));
         return gain;
     }
-
-    public void CalculateDistanceAttenuation(float distance)
-    {
-        attenuation = baseAmplitude * 1f / (1f + distance); // * DistanceAttenuation(distance, 1f, 1f);
-        volume = attenuation;
-        
-    }  
     
-    public void CalculateFinalFrameVolume()
-    {
-        float attenuation = 0.0f;
-
-        if (frameDistance >= maxAudibleDistance)
-        {
-            volume = 0.0f;
-            return;
-        }
-
-        if (frameDistance <= minAudibleDistance)
-        {
-            volume = Mathf.Clamp01(frameGain);
-            return;
-        }
-
-        // falloff... maybe use distance squared?
-        attenuation = minAudibleDistance / frameDistance;
-
-        float distanceRatio = (frameDistance - minAudibleDistance) / (maxAudibleDistance - minAudibleDistance);
-        attenuation *= (1f - distanceRatio); 
-
-        volume = Mathf.Clamp01(Mathf.Clamp01(attenuation) * frameGain);
-        
-        audioSource.volume = volume;
-
-    }
     
     private void CalculateDistances()
     {
@@ -155,108 +148,205 @@ public class AcousticSource : MonoBehaviour
 
     public void RegisterSound()
     {
+        this.enabled = true;
+        this.audioSource.enabled = true;
+       
         timeOfEmission = Time.time;
         AudioManager manager =  FindAnyObjectByType(typeof(AudioManager)) as AudioManager;
         if (manager != null)
         {
             manager.RegisterAudio(this);
+            cachedCoefficients = manager.GetFilterCoefficients();
         }
     }
-
-    // void OnAudioFilterRead(float[] data, int channels)
-    // {
-    //     int writeIndex = state[0];
-    //     int wrapMask = state[1];
-    //
-    //     // data.Length is 1024 for Mono, 2048 for Stereo. 
-    //     // frameCount is always the true number of time slices (e.g., 1024).
-    //     int frameCount = data.Length / channels;
-    //
-    //     for (int i = 0; i < frameCount; i++)
-    //     {
-    //         // as the stereo doesnt matter here, we average left-right
-    //         float monoSample = (channels == 2) 
-    //             ? (data[i * 2] + data[i * 2 + 1]) * 0.5f 
-    //             : data[i];
-    //
-    //         historyBuffer[writeIndex] = monoSample;
-    //         writeIndex = (writeIndex + 1) & wrapMask;
-    //     }
-    //
-    //     state[0] = writeIndex;
-    //     
-    //     NativeArray<float> tempOutput = new NativeArray<float>(data.Length, Allocator.TempJob);
-    //     
-    //     ReadEchoJob echoJob = new ReadEchoJob
-    //     {
-    //         historyBuffer = historyBuffer,
-    //         outputBlock = tempOutput,
-    //         writeIndex = state[0], 
-    //         wrapMask = state[1],
-    //         channels = channels,
-    //         delayMs = echoDelay,
-    //         sampleRate = cachedSampleRate,
-    //         attenuation = 1.0f,
-    //         filterCoefficient = 1.0f,
-    //         filterState = filterState
-    //     };
-    //     
-    //     JobHandle handle = echoJob.Schedule();
-    //     handle.Complete();
-    //     
-    //     for (int i = 0; i < data.Length; i++)
-    //     {
-    //         data[i] += tempOutput[i];
-    //     }
-    //     
-    //     tempOutput.Dispose();
-    // }
-
-
-    [BurstCompile]
-    public struct ReadEchoJob : IJob
+    
+    public void UnRegisterSound()
     {
-        [ReadOnly] public NativeArray<float> historyBuffer;
-        public NativeArray<float> outputBlock; 
+        audioSource.Stop();
+        activeReflectionCount = 0;
+        this.audioSource.enabled = false;
+        this.enabled = false;
+    }
+    
+    public void UpdateReflections(PathData[] sourcePaths)
+    {
+        int writeIndex = (activeBufferIndex + 1) % 2;
+        int validReflections = 0;
 
-        public int writeIndex;
-        public int wrapMask;
-        public int channels;
+        float rayEnergyScalar = (1.0f / 2048); //* 5000;
         
-        public float delayMs;
-        public float sampleRate;
-        public float attenuation;
-        public float filterCoefficient; 
-        
-        public NativeArray<float> filterState; 
+        // Consider moving these to Start() or class level variables (Haas Effect)
+        int mergeThresholdSamples = (int)(0.0025f * cachedSampleRate); 
 
-        public void Execute()
+        float directGainAccumulator = 0f;
+        
+        for (int i = 0; i < sourcePaths.Length; i++)
         {
-            int delaySamples = (int)((delayMs / 1000f) * sampleRate);
-        
-            int readIndex = (writeIndex - delaySamples + wrapMask + 1) & wrapMask;
-        
-            float lastSample = filterState[0];
-            int frameCount = outputBlock.Length / channels;
-
-            for (int i = 0; i < frameCount; i++)
+            var path = sourcePaths[i];
+            
+            if (path.state == 0) 
             {
-                float rawSample = historyBuffer[readIndex];
-            
-                // here we should put the butterworth filter
-                float filteredSample = lastSample + filterCoefficient * (rawSample - lastSample);
-                lastSample = filteredSample;
-            
-                float finalSample = filteredSample * attenuation;
-            
-                for (int c = 0; c < channels; c++)
-                {
-                    outputBlock[i * channels + c] = finalSample;
-                }
-                readIndex = (readIndex + 1) & wrapMask;
+                float dE0 = path.energy0, dE1 = path.energy1, dE2 = path.energy2;
+                float dE3 = path.energy3, dE4 = path.energy4, dE5 = path.energy5;
+
+                AirAbsorption.ApplyAbsorption(ref dE0, ref dE1, ref dE2, ref dE3, ref dE4, ref dE5, path.distance);
+                
+                directGainAccumulator = ((dE0 + dE1 + dE2 + dE3 + dE4 + dE5) / 6f);
+                continue; 
             }
-            filterState[0] = lastSample;
+            
+            
+            float deltaDistance = path.distance - frameDistance;
+            
+            // Skip direct sound
+            if (deltaDistance < 0.05f) continue; 
+            
+            //air absorption
+            float pE0 = path.energy0;
+            float pE1 = path.energy1;
+            float pE2 = path.energy2;
+            float pE3 = path.energy3;
+            float pE4 = path.energy4;
+            float pE5 = path.energy5;
+
+            AirAbsorption.ApplyAbsorption(ref pE0, ref pE1, ref pE2, ref pE3, ref pE4, ref pE5, path.distance);
+            
+            int delaySamples = (int)((deltaDistance / 343.0f) * cachedSampleRate);
+            bool merged = false;
+            
+            // Check for temporal overlap (binning of 2.5ms) - Haas effect
+            for (int r = 0; r < validReflections; r++)
+            {
+                var existingRef = reflectionBuffers[writeIndex][r];
+                
+                if (Mathf.Abs(existingRef.delaySamples - delaySamples) < mergeThresholdSamples)
+                {
+                    existingRef.energy0 += pE0 * rayEnergyScalar;
+                    existingRef.energy1 += pE1 * rayEnergyScalar;
+                    existingRef.energy2 += pE2 * rayEnergyScalar;
+                    existingRef.energy3 += pE3 * rayEnergyScalar;
+                    existingRef.energy4 += pE4 * rayEnergyScalar;
+                    existingRef.energy5 += pE5 * rayEnergyScalar;
+                    
+                    reflectionBuffers[writeIndex][r] = existingRef;
+                    merged = true;
+                    break;
+                }
+            }
+
+            // Initialize new echo if no overlap
+            if (!merged && validReflections < MAX_REFLECTIONS_PER_SOURCE)
+            {
+                reflectionBuffers[writeIndex][validReflections] = new Reflection()
+                {
+                    delaySamples = delaySamples,
+                    energy0 = pE0 * rayEnergyScalar,
+                    energy1 = pE1 * rayEnergyScalar,
+                    energy2 = pE2 * rayEnergyScalar,
+                    energy3 = pE3 * rayEnergyScalar,
+                    energy4 = pE4 * rayEnergyScalar,
+                    energy5 = pE5 * rayEnergyScalar,
+                    arrivalAngles = path.arrivalAngles
+                };
+                validReflections++;
+            }
         }
+    
+        if (validReflections > 0)
+        {
+            Array.Sort(reflectionBuffers[writeIndex], 0, validReflections);
+        }
+        
+        // clamp accumulated volumes to 1.0.
+        for(int r = 0; r < validReflections; r++)
+        {
+            var reflection = reflectionBuffers[writeIndex][r];
+            reflection.energy0 = math.min(reflection.energy0, 1.0f);
+            reflection.energy1 = math.min(reflection.energy1, 1.0f);
+            reflection.energy2 = math.min(reflection.energy2, 1.0f);
+            reflection.energy3 = math.min(reflection.energy3, 1.0f);
+            reflection.energy4 = math.min(reflection.energy4, 1.0f);
+            reflection.energy5 = math.min(reflection.energy5, 1.0f);
+            
+            reflectionBuffers[writeIndex][r] = reflection;
+        }
+        
+        this.directGain = math.min(directGainAccumulator, 1.0f);
+        activeReflectionCount = validReflections;
+        activeBufferIndex = writeIndex; 
+    }
+    
+    void OnAudioFilterRead(float[] data, int channels)
+    {
+        int writeIndex = state[0];
+        int wrapMask = state[1];
+        int frameCount = data.Length / channels;
+        
+        // data.Length is 1024 for Mono, 2048 for Stereo. 
+        // frameCount is always the true number of time slices (e.g., 1024).
+        for (int i = 0; i < frameCount; i++)
+        {
+            float monoInput = 0f;
+            for (int c = 0; c < channels; c++) {
+             monoInput += data[i * channels + c];
+            }
+            monoInput /= channels;
+        
+            historyBuffer[writeIndex] = monoInput;
+        
+            float reflectionAccumulator = 0f;
+            for (int r = 0; r < activeReflectionCount; r++)
+            {
+             var refData = reflectionBuffers[activeBufferIndex][r];
+             int readIndex = (writeIndex - refData.delaySamples + wrapMask + 1) & wrapMask;
+             float rawSample = historyBuffer[readIndex];
+        
+             float filteredSample = 0f;
+             
+             // // Process the 6 bands
+            for (int b = 0; b < 6; b++)
+            {
+                 int stateIndex = (r * 6) + b;
+                 FilterState fState = filterStates[stateIndex];
+                 
+                 float output = ProcessFilter(rawSample, ref fState, cachedCoefficients[b]);
+        
+                 filterStates[stateIndex] = fState;
+        
+                 float bandEnergy = refData.GetEnergy(b);
+                 filteredSample += output * bandEnergy;
+            }
+        
+             reflectionAccumulator += (filteredSample * 0.166667f); 
+            }
+        
+            // limiter for the audio to avoid hard-clipping
+            float wetGain = 1.0f; // adjust this to taste
+            reflectionAccumulator *= wetGain;
+             
+            // reflectionAccumulator /= (1.0f + math.abs(reflectionAccumulator));
+        
+            for (int c = 0; c < channels; c++)
+            {
+                float dry = data[i * channels + c] * directGain;
+        
+                float combined = reflectionAccumulator; // +
+        
+                data[i * channels + c] = math.clamp(combined, -1.0f, 1.0f);
+            }
+            writeIndex = (writeIndex + 1) & wrapMask;
+        }
+        state[0] = writeIndex;
+    }
+
+
+    // https://ccrma.stanford.edu/~jos/fp/Transposed_Direct_Forms.html
+    public static float ProcessFilter(float input, ref FilterState state, FilterCoefficients coef)
+    {
+        float output = coef.a1 * input + state.x1;
+        state.x1 = coef.a2 * input - coef.a4 * output + state.x2;
+        state.x2 = coef.a3 * input - coef.a5 * output;
+        return output;
     }
 
 #if UNITY_EDITOR
@@ -300,4 +390,27 @@ public class AcousticSource : MonoBehaviour
         UnityEditor.Handles.Label(midPoint, $"Perceived: {perceivedDb:F1} dB", style);
     }
     #endif
+}
+
+//THIS SHOULD NOT BE HERE!!!
+public static class AirAbsorption
+{
+    // Precomputed -alpha / 20 for each band up to 4k
+    private const float c_125 = -0.001f / 20f;
+    private const float c_250 = -0.002f / 20f;
+    private const float c_500 = -0.005f / 20f;
+    private const float c_1k  = -0.010f / 20f;
+    private const float c_2k  = -0.025f / 20f;
+    private const float c_4k  = -0.070f / 20f;
+
+    public static void ApplyAbsorption(ref float e0, ref float e1, ref float e2, ref float e3, ref float e4, ref float e5, float distance)
+    {
+        // 10^(c * distance)
+        e0 *= math.pow(10f, c_125 * distance);
+        e1 *= math.pow(10f, c_250 * distance);
+        e2 *= math.pow(10f, c_500 * distance);
+        e3 *= math.pow(10f, c_1k  * distance);
+        e4 *= math.pow(10f, c_2k  * distance);
+        e5 *= math.pow(10f, c_4k  * distance);
+    }
 }

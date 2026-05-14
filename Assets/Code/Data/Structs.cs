@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.InteropServices;
 using Unity.Mathematics;
 using UnityEngine;
@@ -5,17 +6,29 @@ using UnityEngine;
 namespace Code.Data
 {
     [StructLayout(LayoutKind.Sequential)]
-    public struct PathData
+    public struct PathData 
     {
-        public Vector2 arrivalAngles;
+        public float2 arrivalAngles;
         public float distance;
-        public float gain;
-    
-        public int sourceId;
-
-        public int state; // 0 = direct, 1 = reflection, 2 = ??
         
-        public Vector2 padding;
+        //it hurts but i want to avoid unsafe
+        public float energy0;
+        public float energy1;
+        public float energy2;
+        public float energy3;
+        public float energy4;
+        public float energy5;
+        
+        public float padding;
+        
+        public int sourceId;
+        public int state; // 0 = direct, 1 = reflection, 2 = ??
+
+        
+        public float totalGain()
+        {
+            return (energy0 + energy1 + energy2 + energy3 + energy4 + energy5) / 6f;
+        }
     }
     
     [StructLayout(LayoutKind.Sequential)]
@@ -23,8 +36,13 @@ namespace Code.Data
     {
         public Vector3 origin;
         public float radius;
+        
+        public float maxAudibleDistance;
+        public float minAudibleDistance;
+
+        public float power;
+        
         public int sourceId;
-        public Vector3 padding;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -90,6 +108,7 @@ namespace Code.Data
         public Matrix4x4 localToWorld;
 
         public int objectId;
+        public int materialId;
 
         public int blasOffset;
         public int blasCount;
@@ -97,6 +116,86 @@ namespace Code.Data
         public int trianglesOffset;
         public int trianglesCount;
         
-        float3 padding;
+        float2 padding;
     }
+    
+    //i realize that i use many very similar structs but i cannot focus on managing this.
+    //This struct is only to pass the material data into the tracer.
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MaterialData
+    {
+        public float absorption0;
+        public float absorption1;
+        public float absorption2;
+        public float absorption3;
+        public float absorption4;
+        public float absorption5;
+
+        public float scattering;
+        public float padding;
+        
+        public float GetAbsorption(int bandIndex)
+        {
+            return bandIndex switch
+            {
+                0 => absorption0,
+                1 => absorption1,
+                2 => absorption2,
+                3 => absorption3,
+                4 => absorption4,
+                5 => absorption5,
+                _ => 0f
+            };
+        }
+    }
+    
+    //this one keeps track of the early reflections
+    public struct Reflection : IComparable<Reflection>
+    {
+        public int delaySamples;
+        
+        public float energy0;
+        public float energy1;
+        public float energy2;
+        public float energy3;
+        public float energy4;
+        public float energy5;
+        
+        public float2 arrivalAngles;
+        
+        public int CompareTo(Reflection other)
+        {
+            return delaySamples.CompareTo(other.delaySamples);
+        }
+        
+        public float GetEnergy(int bandIndex)
+        {
+            return bandIndex switch
+            {
+                0 => energy0,
+                1 => energy1,
+                2 => energy2,
+                3 => energy3,
+                4 => energy4,
+                5 => energy5,
+                _ => 0f
+            };
+        }
+    }
+    
+    public struct FilterCoefficients
+    {
+        public float a1; 
+        public float a2;
+        public float a3; 
+        public float a4; 
+        public float a5; 
+    }
+    
+    public struct FilterState
+    {
+        public float x1;
+        public float x2;
+    }
+    
 }

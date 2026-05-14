@@ -13,7 +13,7 @@ public class CsoundController : MonoBehaviour
     [Range(0.0f, 1.0f)] public float abs2000HzCoeff = 0.0f;
     [Range(0.0f, 1.0f)] public float abs4000HzCoeff = 0.0f;
 
-    [SerializeField] private readonly bool updateEveryFrame = true;
+    //[SerializeField] private readonly bool updateEveryFrame = true;
 
     readonly FrequencyRange freq125HzRange = new(Frequency.freq125Hz);
     readonly FrequencyRange freq250HzRange = new(Frequency.freq250Hz);

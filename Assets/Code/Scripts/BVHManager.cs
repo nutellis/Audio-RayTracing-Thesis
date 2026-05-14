@@ -275,7 +275,8 @@ public class BVHManager : MonoBehaviour
         leafBoundsBuffer = new ComputeBuffer(objectCount * 2, sizeof(float) * 3);
 
         // One flag per internal node
-        atomicFlagsBuffer = new ComputeBuffer(objectCount - 1, sizeof(int));
+        
+        atomicFlagsBuffer = new ComputeBuffer(Mathf.Max(1, objectCount - 1), sizeof(int));
         zeroFlags = new int[objectCount - 1];
 
         // repare leaf data(Min and Max for each renderer)
@@ -288,6 +289,7 @@ public class BVHManager : MonoBehaviour
         }
 
         leafBoundsBuffer.SetData(rawBounds);
+
     }
 
     void RefitBVH()

@@ -1,22 +1,25 @@
 
 #pragma kernel InitRays
 #pragma kernel TraceRays
+#pragma kernel ResetCounter
 
 #define INF 1e30
 #define PI 3.14159265359
-
-int initialRays;
 
 float deltaTime;
 uint frameCount;
 
 
-cbuffer ListenerInformation
+cbuffer GenericBuffer
 {
-    float3 listenerPosition;
-    float3 listenerForward;
-    float3 listenerRight;
+    float4 listenerPosition;
+    float4 listenerForward;
+    float4 listenerRight;
+    
     int listenerId;
+    int initialRays;
+    
+    float2 padding;
 };
 
 struct DebugInfo
@@ -96,6 +99,7 @@ struct ObjInstance {
     float4x4 localToWorld;
 
     int objectId;
+    int materialId;
 
     int blasOffset;
     int blasCount;
@@ -103,7 +107,7 @@ struct ObjInstance {
     int trianglesOffset;
     int trianglesCount;
     
-    float3 padding;
+    float2 padding;
 };
 
 RWStructuredBuffer<Ray> rayBuffer;
@@ -121,9 +125,12 @@ struct SourceData
     float3 origin;
     float radius;
     
-    int sourceId;
+    float maxAudibleDistance;
+    float minAudibleDistance;
     
-    float3 padding;
+    float power;
+        
+    int sourceId;
 };
 StructuredBuffer<SourceData> sources;
 int sourceCount;
@@ -131,19 +138,30 @@ int sourceCount;
 struct PathData
 {
     float2 arrivalAngles; // Lateral (Left/Right) and Elevation (Up/Down)
-
     float distance;
-    float gain;
+    
+    float energy0;
+    float energy1;
+    float energy2;
+    float energy3;
+    float energy4;
+    float energy5;
+    
+    float padding;
     
     int sourceId;
-    
     int type;
-    
-    float2 padding;
 };
 RWStructuredBuffer<PathData> pathBuffer;
 RWStructuredBuffer<int> pathCounter;
 
+struct MaterialData
+{
+    float absorption[6];
+    float scattering;
+    float padding; 
+};
+StructuredBuffer<MaterialData> materials;
 
 // https://www.reedbeta.com/blog/hash-functions-for-gpu-rendering/
 uint PcgHash(uint input)
@@ -187,7 +205,7 @@ void InitRays(uint3 id : SV_DispatchThreadID)
     
     Ray ray;
     
-    ray.origin = listenerPosition;
+    ray.origin = listenerPosition.xyz;
     ray.direction = SphericalDistribution(id.x);
     ray.padding = float2(0.0f, 0.0f);
     
@@ -203,7 +221,7 @@ float IntersectTriangle(float3 origin, float3 direction, Triangle tri)
     const float3 h = cross( direction, edge2 );
     const float a = dot( edge1, h );
 
-    if (abs(a) < 0.0001f) return INF; // ray parallel to triangle
+    if (abs(a) < 1e-7f) return INF; // ray parallel to triangle
 
     const float f = 1 / a;
     const float3 s = origin - tri.vertexA;
@@ -217,7 +235,7 @@ float IntersectTriangle(float3 origin, float3 direction, Triangle tri)
     if (v < 0.0f || u + v > 1.0f) return INF;
 
     const float t = f * dot( edge2, q );
-    if (t > 0.0001f) return t;
+    if (t > 1e-5f) return t;
     
     return INF;
 }
@@ -270,6 +288,8 @@ RayHit IntersectClosest(float3 origin, float3 direction, float maxDistance)
             // move the ray into the blas local space
             float3 localOrigin = mul(instance.worldToLocal, float4(origin, 1.0)).xyz;
             float3 localDirection = mul(instance.worldToLocal, float4(direction, 0.0)).xyz;
+            float worldToLocalScale = length(localDirection);
+            localDirection /= worldToLocalScale;
             float3 invLocalDirection = 1.0 / localDirection;
             
             int blasStack[32];
@@ -281,9 +301,10 @@ RayHit IntersectClosest(float3 origin, float3 direction, float maxDistance)
                 uint blasNodeIdx = blasStack[--blasStackCounter];
                 BlasNode blasNode = blasTrees[blasNodeIdx];
         
-                float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, maxDistance);
+                float localMaxDistance = hit.distance * worldToLocalScale;
+                float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
                 
-                if (blasDistance >= hit.distance) continue;
+                if (blasDistance >= INF || blasDistance / worldToLocalScale >= hit.distance) continue;
                 
                 if (blasNode.triCount > 0)
                 {
@@ -291,15 +312,24 @@ RayHit IntersectClosest(float3 origin, float3 direction, float maxDistance)
                     {
                         Triangle tri = triangleSoup[instance.trianglesOffset + blasNode.leftFirst + i];
                         float dist = IntersectTriangle(localOrigin, localDirection, tri);
-                        if (dist < hit.distance)
+                        if (dist >= INF) continue;
+                        
+                        float worldDist = dist / worldToLocalScale;
+                        if (worldDist < hit.distance)
                         {
                             float3 edge1 = tri.vertexB - tri.vertexA;
                             float3 edge2 = tri.vertexC - tri.vertexA;
                             float3 localNormal = normalize(cross(edge1, edge2));
                             
-                            hit.surfaceNormal = normalize(mul(localNormal, (float3x3)instance.localToWorld));
-                            hit.distance = dist;
+                            float3 worldNormal = normalize(mul(localNormal, (float3x3)instance.worldToLocal));
+                            if (dot(worldNormal, direction) > 0) 
+                            {
+                                worldNormal = -worldNormal;
+                            }
+                            hit.surfaceNormal = worldNormal;
+                            hit.distance = worldDist;
                             hit.objectId = instance.objectId;
+                            hit.materialId = instance.materialId;
                         }
                     }
                 }
@@ -348,6 +378,8 @@ bool IntersectAny(float3 origin, float3 direction, float maxDistance, int2 ignor
             // move the ray into the blas local space
             float3 localOrigin = mul(instance.worldToLocal, float4(origin, 1.0)).xyz;
             float3 localDirection = mul(instance.worldToLocal, float4(direction, 0.0)).xyz;
+            float worldToLocalScale = length(localDirection);
+            localDirection /= worldToLocalScale;
             float3 invLocalDirection = 1.0 / localDirection;
             
             int blasStack[32];
@@ -359,7 +391,8 @@ bool IntersectAny(float3 origin, float3 direction, float maxDistance, int2 ignor
                 uint blasNodeIdx = blasStack[--blasStackCounter];
                 BlasNode blasNode = blasTrees[blasNodeIdx];
         
-                float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, maxDistance);
+                float localMaxDistance = maxDistance * worldToLocalScale;
+                float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
                 
                 if (blasDistance >= maxDistance) continue;
                 
@@ -401,7 +434,7 @@ float IntersectSphere(float3 rayOrigin, float3 rayDir, float3 sphereCenter, floa
     if (h < 0.0) return INF;
     return -b - sqrt(h);
 }
-//
+
 
 [numthreads(64,1,1)]
 void TraceRays(uint3 id : SV_DispatchThreadID)
@@ -412,22 +445,18 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
     }
 
     Ray r = rayBuffer[id.x];
-        
-    //we assume that speed of sound is 343.0, and we deal only with air for now. 
-    // Later on we will have to pass a specific speed for each material we are dealing
-    float speedOfSound = 343.0;
-    
-    // we need to define the step per frame. How "far" does the ray travel per frame?
-    // a valid distance might be the elapsed time since the last frame * speed of sound
-    
-    float stepDistance = speedOfSound * deltaTime;
-    
+
     // we get the current position and direction of the ray
-    
     float3 currentPos = r.origin;
     float3 currentDir = r.direction;
+    float3 firstDir = r.direction;
     float totalDistance = 0;
     float energy[6] = {1, 1, 1, 1, 1, 1};
+
+    
+    float2 arrivalAngles;
+    arrivalAngles.x = dot(firstDir, listenerRight.xyz); // Lateral
+    arrivalAngles.y = dot(firstDir, float3(0, 1, 0));    // Elevation
     
     //direct sound
     if (id.x == 0)
@@ -435,25 +464,34 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         // i call these direct rays but they are not "rays"
         for (int i = 0; i < sourceCount; i++)
         {
-            float3 toSource = sources[i].origin - listenerPosition;
+            SourceData source = sources[i];
+            float3 toSource = source.origin - listenerPosition.xyz;
             float dist = length(toSource);
             if (dist < 0.001) continue;
             float3 dir = toSource / dist;
             
             // Check if path to a sound source is clear
-            if (!IntersectAny(listenerPosition, dir, dist, int2(sources[i].sourceId, listenerId)))
+            if (!IntersectAny(listenerPosition.xyz, dir, dist, int2(source.sourceId, listenerId)))
             {
                 PathData directPath;
                 directPath.distance = dist;
-                directPath.gain = 1.0;
-                directPath.sourceId = sources[i].sourceId;
-                directPath.padding = float2(0, 0);
+                
+                float gain = source.power * (source.minAudibleDistance / max(source.minAudibleDistance, dist));
+  
+                directPath.energy0 = gain;
+                directPath.energy1 = gain; 
+                directPath.energy2 = gain; 
+                directPath.energy3 = gain; 
+                directPath.energy4 = gain; 
+                directPath.energy5 = gain;
+                
+                directPath.sourceId = source.sourceId;
+                directPath.padding = 0.0f;
                 directPath.type = 0; // direct sound
                 
                 // Calculate local arrival for HRTF/Panning
-                float3 right = cross(listenerForward, float3(0, 1, 0));
-                directPath.arrivalAngles.x = dot(dir, right); // Lateral
-                directPath.arrivalAngles.y = dot(dir, float3(0, 1, 0)); // Elevation
+                directPath.arrivalAngles.x = dot(dir, listenerRight.xyz); // Lateral
+                directPath.arrivalAngles.y = dot(dir, float3(0, 1, 0));
 
                 uint index;
                 InterlockedAdd(pathCounter[0], 1, index);
@@ -462,55 +500,128 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         }
     }
     
-     // for (int bounce = 0; bounce <5; bounce++)
-     // {
-     //     RayHit hit = IntersectClosest(currentPos, currentDir, 1000, tlasTree, blasTrees, objectInstances, triangleSoup);
-     //    
-     //     if (hit.distance == INF) break;
-     //     
-     //     float3 hitPos = currentPos + currentDir * hit.distance;
-     //     float3 normal = hit.surfaceNormal;
-     //   
-     //     for (int i = 0; i < sourceCount; i++)
-     //     {
-     //         float distToSource = IntersectSphere(currentPos, currentDir, sources[i].origin, sources[i].radius);
-     //         
-     //         if (distToSource > 0.0 && distToSource < hit.distance) //
-     //         {
-     //             uint index;
-     //             InterlockedAdd(pathCounter[0], 1, index);
-     //             if (index < 1024) // Max paths safety check
-     //             {
-     //                 PathData path;
-     //                 path.distance = totalDistance + distToSource;
-     //                
-     //                 //energy per band / distance * absorption
-     //                 //per band
-     //                 for (int j = 0; j < 6; j++){
-     //                     // path.gain = (energy[j] / path.distance * material.absoprtion[i]);
-     //                 }
-     //                 path.gain = 1.0;
-     //                 path.sourceId = sources[i].sourceId;
-     //                 path.arrivalAngles = r.direction;
-     //                 path.type = 1; // reflection
-     //                 path.padding = float2(0, 0);
-     //                 pathBuffer[index] = path;
-     //             }
-     //         }
-     //     }
-     //     
-     //     if (hit.distance == INF) break;
-     //
-     //     
-     //     totalDistance += hit.distance;
-     //
-     //     // REFLECT
-     //     currentPos = currentPos + currentDir * hit.distance + hit.surfaceNormal * 0.001;
-     //     currentDir = normalize(reflect(currentDir, hit.surfaceNormal));
-     //
-     //     //    // ENERGY LOSS
-     //     //   // energy *= 0.8;
-     //
-     //     //if (energy[0] < 0.01) break;
-     // }
+    for (int bounce = 0; bounce < 5; bounce++)
+    {
+        float closestSourceDist = INF;
+        int hitSourceIndex = -1;
+
+        // specular check if the current bounce is in the way of a source
+        for (int i = 0; i < sourceCount; i++)
+        {
+            float sourceHit = IntersectSphere(currentPos, currentDir, sources[i].origin, sources[i].radius);
+            if (sourceHit > 0.0 && sourceHit < closestSourceDist)
+            {
+                closestSourceDist = sourceHit;
+                hitSourceIndex = i;
+            }
+        }
+        
+        //  main scene intersection test
+        RayHit hit = IntersectClosest(currentPos, currentDir, 1000);
+       
+        //if a source is closer to a wall or object we need that path. This means that we get a perfect "random" specular hit
+        if (closestSourceDist < hit.distance)
+        {
+            uint index;
+            InterlockedAdd(pathCounter[0], 1, index);
+            if (index < 20480) {
+                SourceData source = sources[hitSourceIndex];
+                PathData path;
+                path.distance = totalDistance + closestSourceDist + source.radius;
+                
+                float d_min = source.minAudibleDistance; 
+                        
+                float gain = source.power * (d_min / max(d_min, path.distance));
+                                    
+                path.energy0 = energy[0] * gain;
+                path.energy1 = energy[1] * gain;
+                path.energy2 = energy[2] * gain;
+                path.energy3 = energy[3] * gain;
+                path.energy4 = energy[4] * gain;
+                path.energy5 = energy[5] * gain;
+                    
+                path.sourceId = sources[hitSourceIndex].sourceId;
+                path.arrivalAngles = arrivalAngles;
+                path.type = 10 + bounce; // 10 = specular reflection, 100 = NEE Reflection
+                path.padding = 0.0f;
+                    
+                pathBuffer[index] = path;
+            }
+            break; 
+            
+            // we break, no need to check more as we hit a source.
+        }
+        
+        // no source or object in our way
+        if (hit.distance == INF) break;
+        
+        //if we got here, it means we hit something.
+        totalDistance += hit.distance;
+        
+        //get the material of the object
+        MaterialData mat = materials[hit.materialId];
+        
+        // get the vector of the hitpoint
+        float3 hitPoint = currentPos + currentDir * hit.distance;
+        
+        //if the material allows for diffuse scattering we use NEE https://www.cg.tuwien.ac.at/sites/default/files/course/4854/attachments/12_3_next%20event%20estimation_notes.pdf
+        if (mat.scattering > 0.1) {
+
+            // next event estimation (not exactly but almost) 
+            for (int i = 0; i < sourceCount; i++)
+            {
+                SourceData source = sources[i];
+                float3 toSource = source.origin - hitPoint;
+                float distToSource = length(toSource);
+                float3 dirToSource = toSource / distToSource;
+
+                float3 shadowOrigin = hitPoint + hit.surfaceNormal * 0.001;
+                if (!IntersectAny(shadowOrigin, dirToSource, distToSource, int2(source.sourceId, hit.objectId)))
+                {
+                    uint index;
+                    InterlockedAdd(pathCounter[0], 1, index);
+                    if (index < 20480) 
+                    {
+                        PathData path;
+                    
+                        float pathDist = totalDistance + distToSource;
+                        path.distance = pathDist;
+                    
+                        float d_min = source.minAudibleDistance; 
+                        
+                        float gain = source.power * (d_min / max(d_min, pathDist));
+
+                        // Apply material absorption/scattering on top of this gain
+                        path.energy0 = energy[0] * (1.0 - mat.absorption[0]) * mat.scattering * gain;
+                        path.energy1 = energy[1] * (1.0 - mat.absorption[1]) * mat.scattering * gain;
+                        path.energy2 = energy[2] * (1.0 - mat.absorption[2]) * mat.scattering * gain;
+                        path.energy3 = energy[3] * (1.0 - mat.absorption[3]) * mat.scattering * gain;
+                        path.energy4 = energy[4] * (1.0 - mat.absorption[4]) * mat.scattering * gain;
+                        path.energy5 = energy[5] * (1.0 - mat.absorption[5]) * mat.scattering * gain;
+                    
+                        path.sourceId = sources[i].sourceId;
+                        path.arrivalAngles = arrivalAngles;
+                        path.type = 100 + bounce; // 10 = reflection, 100 = NEE Reflection
+                        path.padding = 0.0f;
+                    
+                        pathBuffer[index] = path;
+                    }
+                }
+            }
+        }
+        //update energy for the next bounce 
+        for (int j = 0; j < 6; j++) {
+            energy[j] *= (1.0 - mat.absorption[j]) * (1.0 - mat.scattering);
+        }
+        
+        // REFLECT
+        currentPos = (currentPos + currentDir * hit.distance) + (hit.surfaceNormal * 0.001);
+        currentDir = normalize(reflect(currentDir, hit.surfaceNormal));
+    }
+}
+
+[numthreads(1,1,1)]
+void ResetCounter(uint3 id : SV_DispatchThreadID)
+{
+    pathCounter[0] = 0;
 }

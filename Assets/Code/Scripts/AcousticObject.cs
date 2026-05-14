@@ -21,7 +21,28 @@ public class AcousticObject : AcousticBase
        if (bvhManager)
        {
            var metadata = bvhManager.BuildBlas(meshFilter);
-
+           MaterialData material;
+           if (!ObjectRegistry<MaterialData>.Instance.HasEntry(acousticMaterial.materialID))
+           {
+               material = new MaterialData
+               {
+                   absorption0 = acousticMaterial.absorptionCoefficients[0],
+                   absorption1 = acousticMaterial.absorptionCoefficients[1],
+                   absorption2 = acousticMaterial.absorptionCoefficients[2],
+                   absorption3 = acousticMaterial.absorptionCoefficients[3],
+                   absorption4 = acousticMaterial.absorptionCoefficients[4],
+                   absorption5 = acousticMaterial.absorptionCoefficients[5],
+                
+                   scattering = acousticMaterial.scattering,
+                   padding = 0.0f
+               };
+               ObjectRegistry<MaterialData>.Instance.RegisterObject(acousticMaterial.materialID, material);
+           }
+           else
+           {
+               material = ObjectRegistry<MaterialData>.Instance.GetObject(acousticMaterial.materialID);
+           }
+           
            objectInstance = new Instance
            {
                 objectId = InstanceID,
@@ -30,10 +51,12 @@ public class AcousticObject : AcousticBase
                 blasOffset = metadata.blasOffset,
                 blasCount = metadata.blasCount,
                 trianglesOffset = metadata.trianglesOffset,
-                trianglesCount = metadata.trianglesCount
+                trianglesCount = metadata.trianglesCount,
+                materialId = ObjectRegistry<MaterialData>.Instance.GetIndexOf(acousticMaterial.materialID)
            };
-
+           
            ObjectRegistry<Instance>.Instance.RegisterObject(InstanceID, objectInstance);
+         
        }
        else
        {
