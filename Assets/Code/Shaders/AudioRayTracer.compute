@@ -559,7 +559,9 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
             // Check if path to a sound source is clear
             //if (!IntersectAny(listenerPosition.xyz, dir, dist, int2(source.sourceId, listenerId)))
             float transmitted[3] = {1.0, 1.0, 1.0};
+            
             Transmit(listenerPosition.xyz, dir, dist, source.sourceId, transmitted);
+            
             float maxSurvived = max(transmitted[0], max(transmitted[1], transmitted[2]));
             if (maxSurvived > 0.01) {
                 PathData directPath;
@@ -567,12 +569,12 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
                 
                 float gain = source.power * (source.minAudibleDistance / max(source.minAudibleDistance, dist));
   
-                directPath.energy0 = gain;
-                directPath.energy1 = gain; 
-                directPath.energy2 = gain; 
-                directPath.energy3 = gain; 
-                directPath.energy4 = gain; 
-                directPath.energy5 = gain;
+                directPath.energy0 = gain * transmitted[0];
+                directPath.energy1 = gain * transmitted[0];
+                directPath.energy2 = gain * transmitted[1];
+                directPath.energy3 = gain * transmitted[1];
+                directPath.energy4 = gain * transmitted[2];
+                directPath.energy5 = gain * transmitted[2];
                 
                 directPath.sourceId = source.sourceId;
                 directPath.padding = 0.0f;

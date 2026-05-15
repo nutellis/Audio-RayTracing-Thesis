@@ -219,52 +219,35 @@ public class AudioManager : MonoBehaviour
             // we apply this data to each source
             foreach (var source in registeredAudioSources.Values)
             {
-                bool isAudible = source.frameGain/initialRays > 0.001f;
-
                 float delaySeconds = source.frameDistance / 343.0f;
                 float timeOfArrival = source.timeOfEmission + delaySeconds;
                 float elapsedTime = Time.time - timeOfArrival;
-
-                if (isAudible)
+                
+                if (pathsBySource.TryGetValue(source.gameObject.GetInstanceID(), out var sourcePaths))
                 {
-                    if (pathsBySource.TryGetValue(source.gameObject.GetInstanceID(), out var sourcePaths))
-                    {
-                        PathData[] finalPaths = new PathData[sourcePaths.Count];
-                        sourcePaths.CopyTo(finalPaths);
-                        source.UpdateReflections(finalPaths);
-                    }
-                    else
-                    {
-                        var emptyList = Array.Empty<PathData>();
-                        source.UpdateReflections(emptyList);
-                    }
-
-                    if (Time.time >= timeOfArrival)
-                    {
-                        //the sound played
-                        if (!source.audioSource.loop && elapsedTime >= source.audioSource.clip.length)
-                        {
-                            sourcesToRemove.Add(source.gameObject.GetInstanceID());
-                            continue;
-                        }
-
-                        if (!source.audioSource.isPlaying)
-                        {
-                            source.audioSource.time = elapsedTime % source.audioSource.clip.length;
-                            source.audioSource.Play(); //.PlayOneShot(source.audioSource.clip, source.volume);
-                        }
-                    }
+                    PathData[] finalPaths = new PathData[sourcePaths.Count];
+                    sourcePaths.CopyTo(finalPaths);
+                    source.UpdateReflections(finalPaths);
                 }
                 else
                 {
+                    var emptyList = Array.Empty<PathData>();
+                    source.UpdateReflections(emptyList);
+                }
+
+                if (Time.time >= timeOfArrival)
+                {
+                    //the sound played
                     if (!source.audioSource.loop && elapsedTime >= source.audioSource.clip.length)
                     {
                         sourcesToRemove.Add(source.gameObject.GetInstanceID());
+                        continue;
                     }
 
-                    if (source.audioSource.isPlaying)
+                    if (!source.audioSource.isPlaying)
                     {
-                        source.audioSource.Stop();
+                        source.audioSource.time = elapsedTime % source.audioSource.clip.length;
+                        source.audioSource.Play(); //.PlayOneShot(source.audioSource.clip, source.volume);
                     }
                 }
             }

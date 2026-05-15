@@ -159,6 +159,7 @@ namespace Code.Data
     public struct Reflection : IComparable<Reflection>
     {
         public int delaySamples;
+        public float fraction;
         
         public float energy0;
         public float energy1;

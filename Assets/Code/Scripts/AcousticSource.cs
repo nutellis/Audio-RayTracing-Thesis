@@ -30,7 +30,7 @@ public class AcousticSource : MonoBehaviour
     public float radius;
     
     
-    private float[] historyBuffer;
+    private float[][] historyBuffer;
     private int[] state; // [0] writeIndex, [1] wrapMask
     
     private int cachedSampleRate;
@@ -90,7 +90,14 @@ public class AcousticSource : MonoBehaviour
         radius = collider ? collider.radius : 1f;
 
         int historySize = 131072; // 2 seconds at 44.8khz
-        historyBuffer = new float[historySize];
+        historyBuffer = new float[6][];
+        historyBuffer[0] = new float[historySize];
+        historyBuffer[1] = new float[historySize];
+        historyBuffer[2] = new float[historySize];
+        historyBuffer[3] = new float[historySize];      
+        historyBuffer[4] = new float[historySize];
+        historyBuffer[5] = new float[historySize];
+        
         state = new int [2];
         state[0] = 0; // writeIndex
         state[1] = historySize - 1; // wrapMask
@@ -191,7 +198,7 @@ public class AcousticSource : MonoBehaviour
 
                 AirAbsorption.ApplyAbsorption(ref dE0, ref dE1, ref dE2, ref dE3, ref dE4, ref dE5, path.distance);
                 
-                directGainAccumulator = ((dE0 + dE1 + dE2 + dE3 + dE4 + dE5) / 6f);
+                directGainAccumulator += ((dE0 + dE1 + dE2 + dE3 + dE4 + dE5) / 6f);
                 continue; 
             }
             
@@ -211,7 +218,9 @@ public class AcousticSource : MonoBehaviour
 
             AirAbsorption.ApplyAbsorption(ref pE0, ref pE1, ref pE2, ref pE3, ref pE4, ref pE5, path.distance);
             
-            int delaySamples = (int)((deltaDistance / 343.0f) * cachedSampleRate);
+            float delaySamples = (deltaDistance / 343.0f) * cachedSampleRate;
+            int sampleFloor = (int)math.floor(delaySamples);
+            float fraction = delaySamples - sampleFloor;
             bool merged = false;
             
             // Check for temporal overlap (binning of 2.5ms) - Haas effect
@@ -239,7 +248,8 @@ public class AcousticSource : MonoBehaviour
             {
                 reflectionBuffers[writeIndex][validReflections] = new Reflection()
                 {
-                    delaySamples = delaySamples,
+                    delaySamples = sampleFloor,
+                    fraction = fraction,
                     energy0 = pE0 * rayEnergyScalar,
                     energy1 = pE1 * rayEnergyScalar,
                     energy2 = pE2 * rayEnergyScalar,
@@ -287,37 +297,64 @@ public class AcousticSource : MonoBehaviour
         for (int i = 0; i < frameCount; i++)
         {
             float monoInput = 0f;
-            for (int c = 0; c < channels; c++) {
-             monoInput += data[i * channels + c];
-            }
+
+            for (int c = 0; c < channels; c++)
+                monoInput += data[i * channels + c];
+
             monoInput /= channels;
         
-            historyBuffer[writeIndex] = monoInput;
-        
+            // 1. Process the filters FIRST
+            float band0 = ProcessFilter(monoInput, ref filterStates[0], cachedCoefficients[0]);
+            float band1 = ProcessFilter(monoInput, ref filterStates[1], cachedCoefficients[1]);
+            float band2 = ProcessFilter(monoInput, ref filterStates[2], cachedCoefficients[2]);
+            float band3 = ProcessFilter(monoInput, ref filterStates[3], cachedCoefficients[3]);
+            float band4 = ProcessFilter(monoInput, ref filterStates[4], cachedCoefficients[4]);
+            float band5 = ProcessFilter(monoInput, ref filterStates[5], cachedCoefficients[5]);
+
+            historyBuffer[0][writeIndex] = band0;
+            historyBuffer[1][writeIndex] = band1;
+            historyBuffer[2][writeIndex] = band2;
+            historyBuffer[3][writeIndex] = band3;
+            historyBuffer[4][writeIndex] = band4;
+            historyBuffer[5][writeIndex] = band5;
+    
             float reflectionAccumulator = 0f;
             for (int r = 0; r < activeReflectionCount; r++)
             {
-             var refData = reflectionBuffers[activeBufferIndex][r];
-             int readIndex = (writeIndex - refData.delaySamples + wrapMask + 1) & wrapMask;
-             float rawSample = historyBuffer[readIndex];
-        
-             float filteredSample = 0f;
-             
-             // // Process the 6 bands
-            for (int b = 0; b < 6; b++)
-            {
-                 int stateIndex = (r * 6) + b;
-                 FilterState fState = filterStates[stateIndex];
-                 
-                 float output = ProcessFilter(rawSample, ref fState, cachedCoefficients[b]);
-        
-                 filterStates[stateIndex] = fState;
-        
-                 float bandEnergy = refData.GetEnergy(b);
-                 filteredSample += output * bandEnergy;
-            }
-        
-             reflectionAccumulator += (filteredSample * 0.166667f); 
+                var refData = reflectionBuffers[activeBufferIndex][r];
+                int baseIndex = writeIndex - refData.delaySamples;
+                int nextIndex = baseIndex - 1;
+
+                baseIndex &= wrapMask;
+                nextIndex &= wrapMask;
+         
+                float a0 = historyBuffer[0][baseIndex]; float b0 = historyBuffer[0][nextIndex];
+                float del0 = a0 * (1.0f - refData.fraction) + b0 * refData.fraction;
+
+                float a1 = historyBuffer[1][baseIndex]; float b1 = historyBuffer[1][nextIndex];
+                float del1 = a1 * (1.0f - refData.fraction) + b1 * refData.fraction;
+
+                float a2 = historyBuffer[2][baseIndex]; float b2 = historyBuffer[2][nextIndex];
+                float del2 = a2 * (1.0f - refData.fraction) + b2 * refData.fraction;
+
+                float a3 = historyBuffer[3][baseIndex]; float b3 = historyBuffer[3][nextIndex];
+                float del3 = a3 * (1.0f - refData.fraction) + b3 * refData.fraction;
+
+                float a4 = historyBuffer[4][baseIndex]; float b4 = historyBuffer[4][nextIndex];
+                float del4 = a4 * (1.0f - refData.fraction) + b4 * refData.fraction;
+
+                float a5 = historyBuffer[5][baseIndex]; float b5 = historyBuffer[5][nextIndex];
+                float del5 = a5 * (1.0f - refData.fraction) + b5 * refData.fraction;
+
+                float filteredReflection = 
+                    (del0 * refData.energy0) +
+                    (del1 * refData.energy1) +
+                    (del2 * refData.energy2) +
+                    (del3 * refData.energy3) +
+                    (del4 * refData.energy4) +
+                    (del5 * refData.energy5);
+    
+                reflectionAccumulator += filteredReflection; 
             }
         
             // limiter for the audio to avoid hard-clipping
@@ -328,17 +365,11 @@ public class AcousticSource : MonoBehaviour
         
             for (int c = 0; c < channels; c++)
             {
-                float dry = data[i * channels + c] * directGain;
-        
-                float combined = dry + reflectionAccumulator; // +
-                if (combined > 1.0 || combined < -1.0)
-                {
-                    data[i * channels + c] = 0;
-                }
-                else
-                {
-                    data[i * channels + c] = math.clamp(combined, -1.0f, 1.0f);
-                }
+                float dry = monoInput * directGain;
+
+                float combined = dry + reflectionAccumulator;
+
+                data[i * channels + c] = math.clamp(combined, -1f, 1f);
             }
             writeIndex = (writeIndex + 1) & wrapMask;
         }
