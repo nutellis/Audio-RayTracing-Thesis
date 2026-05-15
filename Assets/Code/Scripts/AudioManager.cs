@@ -17,7 +17,7 @@ public class AudioManager : MonoBehaviour
     Dictionary<int, AcousticSource> registeredAudioSources; //
     List<int> sourcesToRemove = new List<int>(32);
 
-    ListenerController listener;
+    GameObject listener;
 
     public int maxDb = 120;
 
@@ -37,21 +37,24 @@ public class AudioManager : MonoBehaviour
     ComputeBuffer materialsBuffer;
 
     readonly uint maxPaths = 20480;
+    private Dictionary<int, List<PathData>> pathsBySource  = new Dictionary<int, List<PathData>>();
 
     private AsyncGPUReadbackRequest pathCounterRequest;
     private AsyncGPUReadbackRequest pathDataRequest;
+    
     private bool isTracing = false;
 
     // filter
     FilterCoefficients[] filterCoefficients;
     public float[] centerFreqs = { 125f, 250f, 500f, 1000f, 2000f, 4000f };
     public float bandwidth = 100f;
+
     private const float thirdOctaveFactor = 0.23156333016903374f; // Precomputed value for (2^(1/6) - 2^(-1/6))
 
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     void Start()
     {
-        listener = FindFirstObjectByType<ListenerController>();
+        listener = GameObject.FindGameObjectWithTag("Player").gameObject;
 
         registeredAudioSources = new Dictionary<int, AcousticSource>();
 
@@ -88,7 +91,7 @@ public class AudioManager : MonoBehaviour
         for (int i = 0; i < 6; i++)
         {
             bandwidth = centerFreqs[i] * thirdOctaveFactor;
-            filterCoefficients[i] = CreateBandPass(centerFreqs[i], bandwidth, AudioSettings.outputSampleRate);
+            filterCoefficients[i] = CreateBandPass(centerFreqs[i], bandwidth, 0.0f);
         }
 
         InitializeRays(initialRays);
@@ -116,7 +119,7 @@ public class AudioManager : MonoBehaviour
                 PathData[] paths = new PathData[maxPaths];
                 pathDataRequest.GetData<PathData>().CopyTo(paths);
 
-                ProcessAudioPaths(paths, count);
+                ProcessAudioPaths(paths,count);
             }
         }
 
@@ -179,80 +182,152 @@ public class AudioManager : MonoBehaviour
 
     static readonly ProfilerMarker processFrameMarker = new("Acoustic.ProcessAudioPaths");
 
-
-    void ProcessAudioPaths(PathData[] paths, uint counter)
+void ProcessAudioPaths(PathData[] paths, uint counter)
+{
+    using (processFrameMarker.Auto())
     {
-        using (processFrameMarker.Auto())
+        sourcesToRemove.Clear();
+
+        // 1. Reset frame data
+        foreach (var audioSource in registeredAudioSources.Values)
         {
-            sourcesToRemove.Clear();
-            //first we clean up this frame's data
-            foreach (var audioSource in registeredAudioSources.Values)
+            audioSource.frameGain = 0f;
+            audioSource.frameDistance = float.MaxValue;
+        }
+
+        // 2. Group paths without allocating memory
+        foreach (var list in pathsBySource.Values) list.Clear();
+        pathsBySource.Clear();
+
+        for (int i = 0; i < counter; i++)
+        {
+            var path = paths[i];
+            if (!pathsBySource.TryGetValue(path.sourceId, out var list))
             {
-                audioSource.frameGain = 0f;
-                audioSource.frameDistance = float.MaxValue;
+                list = new List<PathData>(64); // Preallocate capacity
+                pathsBySource[path.sourceId] = list;
             }
 
-            Dictionary<int, List<PathData>> pathsBySource = new Dictionary<int, List<PathData>>();
+            list.Add(path);
 
-            for (int i = 0; i < counter; i++)
+            if (registeredAudioSources.TryGetValue(path.sourceId, out var source))
             {
-                var path = paths[i];
-                if (!pathsBySource.TryGetValue(path.sourceId, out var list))
+                source.frameGain += path.totalGain();
+                if (path.distance < source.frameDistance)
                 {
-                    list = new List<PathData>();
-                    pathsBySource[path.sourceId] = list;
-                }
-
-                list.Add(path);
-
-                // we accumulate per path the gain and the relevant data for each source
-                if (registeredAudioSources.TryGetValue(path.sourceId, out var source))
-                {
-                    source.frameGain += path.totalGain();
-                    if (path.distance < source.frameDistance)
-                    {
-                        source.frameDistance = path.distance;
-                    }
+                    source.frameDistance = path.distance;
                 }
             }
+        }
 
-            // we apply this data to each source
-            foreach (var source in registeredAudioSources.Values)
+        // 3. Apply data and handle FMOD playback
+        foreach (var source in registeredAudioSources.Values)
+        {
+            float delaySeconds = source.frameDistance / 343.0f;
+            float timeOfArrival = source.timeOfEmission + delaySeconds;
+            float elapsedTime = Time.time - timeOfArrival;
+            
+            if (pathsBySource.TryGetValue(source.gameObject.GetInstanceID(), out var sourcePaths))
             {
-                float delaySeconds = source.frameDistance / 343.0f;
-                float timeOfArrival = source.timeOfEmission + delaySeconds;
-                float elapsedTime = Time.time - timeOfArrival;
-                
-                if (pathsBySource.TryGetValue(source.gameObject.GetInstanceID(), out var sourcePaths))
+                // Use a cached array or NativeArray here if possible to avoid the .ToArray() allocation
+                source.UpdateReflections1(sourcePaths.ToArray());
+            }
+            else
+            {
+                source.UpdateReflections1(Array.Empty<PathData>());
+            }
+
+            // Playback Sync Logic
+            if (Time.time >= timeOfArrival)
+            {
+                // Let FMOD handle looping. If the event finishes, it will enter STOPPED state.
+                if (source.IsFinished())
                 {
-                    PathData[] finalPaths = new PathData[sourcePaths.Count];
-                    sourcePaths.CopyTo(finalPaths);
-                    source.UpdateReflections(finalPaths);
-                }
-                else
-                {
-                    var emptyList = Array.Empty<PathData>();
-                    source.UpdateReflections(emptyList);
+                    sourcesToRemove.Add(source.gameObject.GetInstanceID());
+                    continue;
                 }
 
-                if (Time.time >= timeOfArrival)
+                if (!source.IsPlaying())
                 {
-                    //the sound played
-                    if (!source.audioSource.loop && elapsedTime >= source.audioSource.clip.length)
-                    {
-                        sourcesToRemove.Add(source.gameObject.GetInstanceID());
-                        continue;
-                    }
-
-                    if (!source.audioSource.isPlaying)
-                    {
-                        source.audioSource.time = elapsedTime % source.audioSource.clip.length;
-                        source.audioSource.Play(); //.PlayOneShot(source.audioSource.clip, source.volume);
-                    }
+                    source.PlayWithOffset(elapsedTime);
                 }
             }
         }
     }
+}
+    // void ProcessAudioPaths(PathData[] paths, uint counter)
+    // {
+    //     using (processFrameMarker.Auto())
+    //     {
+    //         sourcesToRemove.Clear();
+    //         //first we clean up this frame's data
+    //         foreach (var audioSource in registeredAudioSources.Values)
+    //         {
+    //             audioSource.frameGain = 0f;
+    //             audioSource.frameDistance = float.MaxValue;
+    //         }
+    //
+    //         Dictionary<int, List<PathData>> pathsBySource = new Dictionary<int, List<PathData>>();
+    //
+    //         for (int i = 0; i < counter; i++)
+    //         {
+    //             var path = paths[i];
+    //             if (!pathsBySource.TryGetValue(path.sourceId, out var list))
+    //             {
+    //                 list = new List<PathData>();
+    //                 pathsBySource[path.sourceId] = list;
+    //             }
+    //
+    //             list.Add(path);
+    //
+    //             // we accumulate per path the gain and the relevant data for each source
+    //             if (registeredAudioSources.TryGetValue(path.sourceId, out var source))
+    //             {
+    //                 source.frameGain += path.totalGain();
+    //                 if (path.distance < source.frameDistance)
+    //                 {
+    //                     source.frameDistance = path.distance;
+    //                 }
+    //             }
+    //         }
+    //
+    //         // we apply this data to each source
+    //         foreach (var source in registeredAudioSources.Values)
+    //         {
+    //             float delaySeconds = source.frameDistance / 343.0f;
+    //             float timeOfArrival = source.timeOfEmission + delaySeconds;
+    //             float elapsedTime = Time.time - timeOfArrival;
+    //             
+    //             if (pathsBySource.TryGetValue(source.gameObject.GetInstanceID(), out var sourcePaths))
+    //             {
+    //                 PathData[] finalPaths = new PathData[sourcePaths.Count];
+    //                 sourcePaths.CopyTo(finalPaths);
+    //                 source.UpdateReflections(finalPaths);
+    //             }
+    //             else
+    //             {
+    //                 var emptyList = Array.Empty<PathData>();
+    //                 source.UpdateReflections(emptyList);
+    //             }
+    //
+    //             if (Time.time >= timeOfArrival)
+    //             {
+    //                 //the sound played
+    //                 if (!source.audioSource.loop && elapsedTime >= source.audioSource.clip.length)
+    //                 {
+    //                     sourcesToRemove.Add(source.gameObject.GetInstanceID());
+    //                     continue;
+    //                 }
+    //
+    //                 if (!source.audioSource.isPlaying)
+    //                 {
+    //                     source.audioSource.time = elapsedTime % source.audioSource.clip.length;
+    //                     source.audioSource.Play(); //.PlayOneShot(source.audioSource.clip, source.volume);
+    //                 }
+    //             }
+    //         }
+    //     }
+    // }
 
     //fix this ugly mess. 
     void SetupSourceBuffer()

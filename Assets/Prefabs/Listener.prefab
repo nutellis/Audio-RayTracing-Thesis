@@ -12,7 +12,7 @@ GameObject:
   - component: {fileID: 1647092378963142309}
   - component: {fileID: 4786286972141981505}
   - component: {fileID: 2640308457785783410}
-  - component: {fileID: 142916234651527821}
+  - component: {fileID: 7013391468506649677}
   m_Layer: 0
   m_Name: Listener
   m_TagString: Player
@@ -116,7 +116,7 @@ CapsuleCollider:
   m_Height: 2
   m_Direction: 1
   m_Center: {x: 0, y: 0, z: 0}
---- !u!114 &142916234651527821
+--- !u!114 &7013391468506649677
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -128,7 +128,6 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: e1712dd20ae0df04d97be37e2d0a3807, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::ListenerController
-  audioShader: {fileID: 7200000, guid: e31fd950a8f1d374eb1d35b04bcbbed5, type: 3}
 --- !u!1 &1494672913287090456
 GameObject:
   m_ObjectHideFlags: 0
@@ -139,8 +138,8 @@ GameObject:
   m_Component:
   - component: {fileID: 4293291000965710030}
   - component: {fileID: 4648338847142876756}
-  - component: {fileID: 3331312156051501304}
   - component: {fileID: 5804155883346237045}
+  - component: {fileID: 3830407932888727898}
   m_Layer: 0
   m_Name: Camera
   m_TagString: MainCamera
@@ -214,14 +213,6 @@ Camera:
   m_OcclusionCulling: 1
   m_StereoConvergence: 10
   m_StereoSeparation: 0.022
---- !u!81 &3331312156051501304
-AudioListener:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 1494672913287090456}
-  m_Enabled: 1
 --- !u!114 &5804155883346237045
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -361,3 +352,17 @@ MonoBehaviour:
       enableFptlForForwardOpaque: 0
       enableBigTilePrepass: 0
       isFptlEnabled: 0
+--- !u!114 &3830407932888727898
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1494672913287090456}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 86c6556701af9e04380698b89f691b6e, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: FMODUnity::FMODUnity.StudioListener
+  nonRigidbodyVelocity: 0
+  attenuationObject: {fileID: 0}
