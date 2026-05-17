@@ -6,6 +6,8 @@
 #define INF 1e30
 #define PI 3.14159265359
 
+#define MAX_BINS 800 // 800 bins * 2.5ms = 2.0 seconds of audio tracking
+
 float deltaTime;
 uint frameCount;
 
@@ -154,6 +156,21 @@ struct PathData
 };
 RWStructuredBuffer<PathData> pathBuffer;
 RWStructuredBuffer<int> pathCounter;
+
+struct MacroBin
+{
+    // We use uint because HLSL InterlockedAdd does not support floats
+    uint energy0; 
+    uint energy1;
+    uint energy2;
+    uint energy3;
+    uint energy4;
+    uint energy5;
+};
+
+// E.g., 800 bins (2 seconds of audio at 2.5ms per bin) per source
+RWStructuredBuffer<MacroBin> echogramBuffer;
+
 
 struct MaterialData
 {
@@ -562,29 +579,46 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
             Transmit(listenerPosition.xyz, dir, dist, source.sourceId, transmitted);
             float maxSurvived = max(transmitted[0], max(transmitted[1], transmitted[2]));
             if (maxSurvived > 0.01) {
-                PathData directPath;
-                directPath.distance = dist;
-                
                 float gain = source.power * (source.minAudibleDistance / max(source.minAudibleDistance, dist));
-  
-                directPath.energy0 = gain;
-                directPath.energy1 = gain; 
-                directPath.energy2 = gain; 
-                directPath.energy3 = gain; 
-                directPath.energy4 = gain; 
-                directPath.energy5 = gain;
                 
-                directPath.sourceId = source.sourceId;
-                directPath.padding = 0.0f;
-                directPath.type = 0; // direct sound
-                
-                // Calculate local arrival for HRTF/Panning
-                directPath.arrivalAngles.x = dot(dir, listenerRight.xyz); // Lateral
-                directPath.arrivalAngles.y = dot(dir, float3(0, 1, 0));
-
-                uint index;
-                InterlockedAdd(pathCounter[0], 1, index);
-                pathBuffer[index] = directPath;
+                // Calculate which 2.5ms bin this belongs in
+                float pathTime = dist / 343.0f;
+                uint binIndex = (uint)(pathTime / 0.0025f);
+                if (binIndex < MAX_BINS)
+                {
+                    uint flatIndex = (i * MAX_BINS) + binIndex;
+                    
+                    // Convert float to fixed-point uint (scale by 100,000)
+                    uint eInt = (uint)(gain * 100000.0f);
+                    
+                    InterlockedAdd(echogramBuffer[flatIndex].energy0, eInt);
+                    InterlockedAdd(echogramBuffer[flatIndex].energy1, eInt);
+                    InterlockedAdd(echogramBuffer[flatIndex].energy2, eInt);
+                    InterlockedAdd(echogramBuffer[flatIndex].energy3, eInt);
+                    InterlockedAdd(echogramBuffer[flatIndex].energy4, eInt);
+                    InterlockedAdd(echogramBuffer[flatIndex].energy5, eInt);
+                }
+                // PathData directPath;
+                // directPath.distance = dist;
+                //
+                // directPath.energy0 = gain;
+                // directPath.energy1 = gain; 
+                // directPath.energy2 = gain; 
+                // directPath.energy3 = gain; 
+                // directPath.energy4 = gain; 
+                // directPath.energy5 = gain;
+                //
+                // directPath.sourceId = source.sourceId;
+                // directPath.padding = 0.0f;
+                // directPath.type = 0; // direct sound
+                //
+                // // Calculate local arrival for HRTF/Panning
+                // directPath.arrivalAngles.x = dot(dir, listenerRight.xyz); // Lateral
+                // directPath.arrivalAngles.y = dot(dir, float3(0, 1, 0));
+                //
+                // uint index;
+                // InterlockedAdd(pathCounter[0], 1, index);
+                // pathBuffer[index] = directPath;
             }
         }
     }
@@ -611,32 +645,50 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         //if a source is closer to a wall or object we need that path. This means that we get a perfect "random" specular hit
         if (closestSourceDist < hit.distance)
         {
-            uint index;
-            InterlockedAdd(pathCounter[0], 1, index);
-            if (index < 20480) {
-                SourceData source = sources[hitSourceIndex];
-                PathData path;
-                path.distance = totalDistance + closestSourceDist + source.radius;
+            SourceData source = sources[hitSourceIndex];
+            float finalDist = totalDistance + closestSourceDist + source.radius;
+            float d_min = source.minAudibleDistance; 
+            float gain = source.power * (d_min / max(d_min, finalDist));
+            
+            float pathTime = finalDist / 343.0f;
+            uint binIndex = (uint)(pathTime / 0.0025f);
                 
-                float d_min = source.minAudibleDistance; 
-                        
-                float gain = source.power * (d_min / max(d_min, path.distance));
-                                    
-                path.energy0 = energy[0] * gain;
-                path.energy1 = energy[1] * gain;
-                path.energy2 = energy[2] * gain;
-                path.energy3 = energy[3] * gain;
-                path.energy4 = energy[4] * gain;
-                path.energy5 = energy[5] * gain;
-                    
-                path.sourceId = sources[hitSourceIndex].sourceId;
-                path.arrivalAngles = arrivalAngles;
-                path.type = 10 + bounce; // 10 = specular reflection, 100 = NEE Reflection
-                path.padding = 0.0f;
-                    
-                pathBuffer[index] = path;
+            if (binIndex < MAX_BINS)
+            {
+                uint flatIndex = hitSourceIndex * MAX_BINS + binIndex;
+                
+                InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(energy[0] * gain * 100000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(energy[1] * gain * 100000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(energy[2] * gain * 100000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(energy[3] * gain * 100000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(energy[4] * gain * 100000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(energy[5] * gain * 100000.0f));
             }
-            break; 
+            break;
+            // uint index;
+            // InterlockedAdd(pathCounter[0], 1, index);
+            // SourceData source = sources[hitSourceIndex];
+            // PathData path;
+            // path.distance = totalDistance + closestSourceDist + source.radius;
+            //
+            // float d_min = source.minAudibleDistance; 
+            //         
+            // float gain = source.power * (d_min / max(d_min, path.distance));
+            //                     
+            // path.energy0 = energy[0] * gain;
+            // path.energy1 = energy[1] * gain;
+            // path.energy2 = energy[2] * gain;
+            // path.energy3 = energy[3] * gain;
+            // path.energy4 = energy[4] * gain;
+            // path.energy5 = energy[5] * gain;
+            //     
+            // path.sourceId = sources[hitSourceIndex].sourceId;
+            // path.arrivalAngles = arrivalAngles;
+            // path.type = 10 + bounce; // 10 = specular reflection, 100 = NEE Reflection
+            // path.padding = 0.0f;
+            //     
+            // pathBuffer[index] = path;
+            // break; 
             
             // we break, no need to check more as we hit a source.
         }
@@ -671,37 +723,53 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
                 Transmit(shadowOrigin, dirToSource, distToSource, source.sourceId, transmitted);
                 
                 float maxSurvived = max(transmitted[0], max(transmitted[1], transmitted[2]));
-                // if (!IntersectAny(shadowOrigin, dirToSource, distToSource, int2(source.sourceId, -1)))
                 if (maxSurvived > 0.01)
                 {
-                    uint index;
-                    InterlockedAdd(pathCounter[0], 1, index);
-                    if (index < 20480) 
+                    float pathDist = totalDistance + distToSource;
+                    float d_min = source.minAudibleDistance; 
+                    float gain = source.power * (d_min / max(d_min, pathDist));
+                    
+                    float pathTime = pathDist / 343.0f;
+                    uint binIndex = (uint)(pathTime / 0.0025f);
+                    
+                    if (binIndex < MAX_BINS)
                     {
-                        PathData path;
-                    
-                        float pathDist = totalDistance + distToSource;
-                        path.distance = pathDist;
-                    
-                        float d_min = source.minAudibleDistance; 
+                        uint flatIndex = (i * MAX_BINS) + binIndex;
                         
-                        float gain = source.power * (d_min / max(d_min, pathDist));
-
-                        // Apply material absorption/scattering on top of this gain, also transmission
-                        path.energy0 = energy[0] * (1.0 - mat.absorption[0]) * mat.scattering * gain * transmitted[0];
-                        path.energy1 = energy[1] * (1.0 - mat.absorption[1]) * mat.scattering * gain * transmitted[0];
-                        path.energy2 = energy[2] * (1.0 - mat.absorption[2]) * mat.scattering * gain * transmitted[1];
-                        path.energy3 = energy[3] * (1.0 - mat.absorption[3]) * mat.scattering * gain * transmitted[1];
-                        path.energy4 = energy[4] * (1.0 - mat.absorption[4]) * mat.scattering * gain * transmitted[2];
-                        path.energy5 = energy[5] * (1.0 - mat.absorption[5]) * mat.scattering * gain * transmitted[2];
-                    
-                        path.sourceId = sources[i].sourceId;
-                        path.arrivalAngles = arrivalAngles;
-                        path.type = 100 + bounce; // 10 = reflection, 100 = NEE Reflection
-                        path.padding = 0.0f;
-                    
-                        pathBuffer[index] = path;
+                        float baseCalc = mat.scattering * gain;
+                        
+                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(energy[0] * (1.0 - mat.absorption[0]) * baseCalc * transmitted[0] * 100000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(energy[1] * (1.0 - mat.absorption[1]) * baseCalc * transmitted[0] * 100000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(energy[2] * (1.0 - mat.absorption[2]) * baseCalc * transmitted[1] * 100000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(energy[3] * (1.0 - mat.absorption[3]) * baseCalc * transmitted[1] * 100000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(energy[4] * (1.0 - mat.absorption[4]) * baseCalc * transmitted[2] * 100000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(energy[5] * (1.0 - mat.absorption[5]) * baseCalc * transmitted[2] * 100000.0f));
                     }
+                    // uint index;
+                    // InterlockedAdd(pathCounter[0], 1, index);
+                    // PathData path;
+                    //
+                    // float pathDist = totalDistance + distToSource;
+                    // path.distance = pathDist;
+                    //
+                    // float d_min = source.minAudibleDistance; 
+                    //
+                    // float gain = source.power * (d_min / max(d_min, pathDist));
+                    //
+                    // // Apply material absorption/scattering on top of this gain, also transmission
+                    // path.energy0 = energy[0] * (1.0 - mat.absorption[0]) * mat.scattering * gain * transmitted[0];
+                    // path.energy1 = energy[1] * (1.0 - mat.absorption[1]) * mat.scattering * gain * transmitted[0];
+                    // path.energy2 = energy[2] * (1.0 - mat.absorption[2]) * mat.scattering * gain * transmitted[1];
+                    // path.energy3 = energy[3] * (1.0 - mat.absorption[3]) * mat.scattering * gain * transmitted[1];
+                    // path.energy4 = energy[4] * (1.0 - mat.absorption[4]) * mat.scattering * gain * transmitted[2];
+                    // path.energy5 = energy[5] * (1.0 - mat.absorption[5]) * mat.scattering * gain * transmitted[2];
+                    //
+                    // path.sourceId = sources[i].sourceId;
+                    // path.arrivalAngles = arrivalAngles;
+                    // path.type = 100 + bounce; // 10 = reflection, 100 = NEE Reflection
+                    // path.padding = 0.0f;
+                    //
+                    // pathBuffer[index] = path;
                 }
             }
         }
@@ -712,7 +780,31 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         
         // REFLECT
         currentPos = (currentPos + currentDir * hit.distance) + (hit.surfaceNormal * 0.001);
-        currentDir = normalize(reflect(currentDir, hit.surfaceNormal));
+        // currentDir = normalize(reflect(currentDir, hit.surfaceNormal));
+        
+        // 1. Generate seed (assuming id is uint3, use id.x)
+        uint seed = id.x + bounce * 719393 + frameCount;
+        float random_val = Random(seed);
+
+        // 2. Use step() to avoid bool-to-float cast warnings in HLSL. 
+        // Returns 1.0 if random_val < scattering, else 0.0
+        float is_scattered = step(random_val, mat.scattering);
+
+        // 3. Calculate both possible valid paths
+        float3 specularDir = reflect(currentDir, hit.surfaceNormal);
+
+        // Generate a random vector and flip it if it points inside the wall
+        float3 randomDir = SphericalDistribution(seed); 
+        if (dot(randomDir, hit.surfaceNormal) < 0.0) 
+        {
+            randomDir = -randomDir; 
+        }
+
+        // 4. Branchless mix (lerp does exactly what your math did: A*(1-t) + B*t)
+        currentDir = lerp(specularDir, randomDir, is_scattered);
+
+        // 5. Normalize just in case of floating point drift
+        currentDir = normalize(currentDir);
     }
 }
 

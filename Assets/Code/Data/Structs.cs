@@ -32,6 +32,17 @@ namespace Code.Data
     }
     
     [StructLayout(LayoutKind.Sequential)]
+    public struct MacroBin
+    {
+        public uint energy0;
+        public uint energy1;
+        public uint energy2;
+        public uint energy3;
+        public uint energy4;
+        public uint energy5;
+    }
+    
+    [StructLayout(LayoutKind.Sequential)]
     public struct SourceData
     {
         public Vector3 origin;
