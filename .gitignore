@@ -518,4 +518,3 @@ FodyWeavers.xsd
 /dataSources.local.xml
 # Editor-based HTTP Client requests
 /httpRequests/
-/temp build folder
