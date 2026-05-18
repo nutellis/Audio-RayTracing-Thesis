@@ -656,7 +656,7 @@ public class AcousticSource : MonoBehaviour
     
         int initialRays = audioManager.initialRays;
         // Each ray carries a 1/N fraction of the total acoustic energy
-        float rayNormalization = 1.0f / initialRays; 
+        float rayNormalization = 1.0f / 16000f; 
 
         isBakingIR = true;
 

@@ -780,29 +780,29 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         
         // REFLECT
         currentPos = (currentPos + currentDir * hit.distance) + (hit.surfaceNormal * 0.001);
-        // currentDir = normalize(reflect(currentDir, hit.surfaceNormal));
+        //currentDir = normalize(reflect(currentDir, hit.surfaceNormal));
         
         // 1. Generate seed (assuming id is uint3, use id.x)
         uint seed = id.x + bounce * 719393 + frameCount;
         float random_val = Random(seed);
-
+        
         // 2. Use step() to avoid bool-to-float cast warnings in HLSL. 
         // Returns 1.0 if random_val < scattering, else 0.0
         float is_scattered = step(random_val, mat.scattering);
-
+        
         // 3. Calculate both possible valid paths
         float3 specularDir = reflect(currentDir, hit.surfaceNormal);
-
+        
         // Generate a random vector and flip it if it points inside the wall
         float3 randomDir = SphericalDistribution(seed); 
         if (dot(randomDir, hit.surfaceNormal) < 0.0) 
         {
             randomDir = -randomDir; 
         }
-
+        
         // 4. Branchless mix (lerp does exactly what your math did: A*(1-t) + B*t)
         currentDir = lerp(specularDir, randomDir, is_scattered);
-
+        
         // 5. Normalize just in case of floating point drift
         currentDir = normalize(currentDir);
     }
