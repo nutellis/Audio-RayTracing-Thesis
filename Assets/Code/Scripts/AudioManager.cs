@@ -23,7 +23,7 @@ public class AudioManager : MonoBehaviour
 
     int initRaysKernel;
     int traceKernel;
-    int resetCounterKernel;
+    int echogramResetKernel;
     public ComputeShader audioShader;
 
     public int initialRays = 64000;
@@ -35,10 +35,7 @@ public class AudioManager : MonoBehaviour
     ComputeBuffer debugBuffer;
     ComputeBuffer instancesBuffer;
     ComputeBuffer materialsBuffer;
-
-    readonly uint maxPaths = 64000;
-    Dictionary<int, List<PathData>> pathsBySource = new Dictionary<int, List<PathData>>();
-
+    
     private AsyncGPUReadbackRequest pathCounterRequest;
     private AsyncGPUReadbackRequest pathDataRequest;
     private bool isTracing = false;
@@ -52,58 +49,15 @@ public class AudioManager : MonoBehaviour
     private const int MAX_BINS = 800; // 2.0s at 2.5ms resolution
     private const int MAX_SOURCES = 64; // Matches your sourcesBuffer size
     private int totalEchogramSize = MAX_SOURCES * MAX_BINS;
-    ComputeBuffer echogramBuffer;
-    MacroBin[] emptyEchogramData;
+    GraphicsBuffer echogramBuffer;
+    GraphicsBuffer echogramStagingBuffer;
     MacroBin[] readbackEchogramData;
     AcousticSource[] currentFrameSources; // Caches the exact order sent to GPU
     private AsyncGPUReadbackRequest echogramRequest;
+
+    private bool sourcesDirty;
     // --------------------------
-    
-    // Start is called once before the first execution of Update after the MonoBehaviour is created
-    // void Start()
-    // {
-    //     listener = FindFirstObjectByType<ListenerController>();
-    //
-    //     registeredAudioSources = new Dictionary<int, AcousticSource>();
-    //
-    //     initRaysKernel = audioShader.FindKernel("InitRays");
-    //     traceKernel = audioShader.FindKernel("TraceRays");
-    //     resetCounterKernel = audioShader.FindKernel("ResetCounter");
-    //
-    //     // successful paths data
-    //     pathBuffer = new ComputeBuffer((int)maxPaths, Marshal.SizeOf(typeof(PathData)));
-    //     pathCounterBuffer = new ComputeBuffer(1, sizeof(uint), ComputeBufferType.Default);
-    //
-    //     audioShader.SetBuffer(traceKernel, "pathBuffer", pathBuffer);
-    //     audioShader.SetBuffer(traceKernel, "pathCounter", pathCounterBuffer);
-    //
-    //     audioShader.SetBuffer(resetCounterKernel, "pathCounter", pathCounterBuffer);
-    //
-    //
-    //     //sources buffer
-    //     sourcesBuffer = new ComputeBuffer(64, Marshal.SizeOf(typeof(SourceData)));
-    //
-    //     audioShader.SetBuffer(traceKernel, "sources", sourcesBuffer);
-    //
-    //     debugBuffer = new ComputeBuffer(1, Marshal.SizeOf(typeof(DebugInfo)));
-    //     audioShader.SetBuffer(traceKernel, "debugInfo", debugBuffer);
-    //
-    //     audioShader.SetBuffer(traceKernel, "triangleSoup", bvhManager.GetTrianglesBuffer());
-    //     audioShader.SetBuffer(traceKernel, "blasTrees", bvhManager.GetBlasNodesBuffer());
-    //
-    //     UpdateMaterialsAndInstances();
-    //
-    //     //filter init
-    //     filterCoefficients = new FilterCoefficients[6];
-    //
-    //     for (int i = 0; i < 6; i++)
-    //     {
-    //         bandwidth = centerFreqs[i] * thirdOctaveFactor;
-    //         filterCoefficients[i] = CreateBandPass(centerFreqs[i], bandwidth, AudioSettings.outputSampleRate);
-    //     }
-    //
-    //     InitializeRays(initialRays);
-    // }
+   
     void Start()
     {
         listener = FindFirstObjectByType<ListenerController>();
@@ -111,11 +65,21 @@ public class AudioManager : MonoBehaviour
 
         initRaysKernel = audioShader.FindKernel("InitRays");
         traceKernel = audioShader.FindKernel("TraceRays");
+        echogramResetKernel = audioShader.FindKernel("ResetEchogram");
 
         // --- NEW BUFFER INIT ---
         // 24 bytes = 6 uints * 4 bytes each
-        echogramBuffer = new ComputeBuffer(totalEchogramSize, 24); 
-        emptyEchogramData = new MacroBin[totalEchogramSize];
+        echogramBuffer = new GraphicsBuffer(
+            GraphicsBuffer.Target.Structured | GraphicsBuffer.Target.CopySource, 
+            totalEchogramSize, 
+            24
+        ); 
+
+        echogramStagingBuffer = new GraphicsBuffer(
+            GraphicsBuffer.Target.Structured | GraphicsBuffer.Target.CopyDestination, 
+            totalEchogramSize, 
+            24
+        );
         readbackEchogramData = new MacroBin[totalEchogramSize];
         
         audioShader.SetBuffer(traceKernel, "echogramBuffer", echogramBuffer);
@@ -127,7 +91,9 @@ public class AudioManager : MonoBehaviour
         audioShader.SetBuffer(traceKernel, "triangleSoup", bvhManager.GetTrianglesBuffer());
         audioShader.SetBuffer(traceKernel, "blasTrees", bvhManager.GetBlasNodesBuffer());
 
-        UpdateMaterialsAndInstances();
+        audioShader.SetBuffer(echogramResetKernel, "echogramBuffer", echogramBuffer);
+        
+        InitializeStaticMaterials();
 
         //filter init
         filterCoefficients = new FilterCoefficients[6];
@@ -136,6 +102,9 @@ public class AudioManager : MonoBehaviour
             bandwidth = centerFreqs[i] * thirdOctaveFactor;
             filterCoefficients[i] = CreateBandPass(centerFreqs[i], bandwidth, AudioSettings.outputSampleRate);
         }
+        
+        debugBuffer = new ComputeBuffer(1, Marshal.SizeOf(typeof(DebugInfo)));
+        audioShader.SetBuffer(traceKernel, "debugInfo", debugBuffer);
 
         InitializeRays(initialRays);
     }
@@ -146,17 +115,26 @@ public class AudioManager : MonoBehaviour
         instancesBuffer?.Release();
         materialsBuffer?.Release();
         rayBuffer?.Release();
-        echogramBuffer?.Release(); // Add this
+        echogramBuffer?.Release();
+        debugBuffer?.Release();
+        echogramStagingBuffer?.Release();
     }
     
     private void LateUpdate()
     {
         UpdateListenerData();
-        UpdateMaterialsAndInstances();
 
+        bool shouldUpdateTree = bvhManager.needsRefit;
+        
         bvhManager.UpdateBVH();
-        audioShader.SetBuffer(traceKernel, "tlasTree", bvhManager.GetBVHBuffer());
 
+        if (shouldUpdateTree)
+        {
+            UpdateInstances(true);
+            audioShader.SetBuffer(traceKernel, "tlasTree", bvhManager.GetBVHBuffer());
+
+        }
+  
         // 1. Process Finished Traces
         if (isTracing && echogramRequest.done)
         {
@@ -174,98 +152,47 @@ public class AudioManager : MonoBehaviour
         {
             isTracing = true;
 
-            SetupSourceBuffer();
+            // ONLY upload the buffer if something changed
+            if (sourcesDirty)
+            {
+                SetupSourceBuffer();
+                sourcesDirty = false; // Clear the flag after upload
+            }
 
-            // CRITICAL: Wipe the GPU buffer clean with zeroes before tracing
-            echogramBuffer.SetData(emptyEchogramData);
+            // Wipe the VRAM buffer clean via GPU kernel
+            int clearThreads = Mathf.CeilToInt(totalEchogramSize / 64f);
+            audioShader.Dispatch(echogramResetKernel, clearThreads, 1, 1);
 
+            // Trace rays
             int threadGroups = Mathf.CeilToInt(initialRays / 64f);
             audioShader.Dispatch(traceKernel, threadGroups, 1, 1);
+            
+            Graphics.CopyBuffer(echogramBuffer, echogramStagingBuffer);
 
-            // Request the binned echogram
-            echogramRequest = AsyncGPUReadback.Request(echogramBuffer);
+            // Request readback
+            echogramRequest = AsyncGPUReadback.Request(echogramStagingBuffer);
         }
-
         CleanSounds();
     }
     
-    // private void LateUpdate()
-    // {
-    //     UpdateListenerData();
-    //
-    //     //maybe skip calling it every frame if we are not adding or removing objects
-    //     UpdateMaterialsAndInstances();
-    //
-    //     //update the tree
-    //     bvhManager.UpdateBVH();
-    //     audioShader.SetBuffer(traceKernel, "tlasTree", bvhManager.GetBVHBuffer());
-    //
-    //     if (isTracing && pathCounterRequest.done && pathDataRequest.done)
-    //     {
-    //         isTracing = false;
-    //         if (!pathCounterRequest.hasError && !pathDataRequest.hasError)
-    //         {
-    //             var counterArray = pathCounterRequest.GetData<uint>();
-    //             uint count = counterArray[0] < maxPaths ? counterArray[0] : maxPaths;
-    //
-    //             PathData[] paths = new PathData[maxPaths];
-    //             pathDataRequest.GetData<PathData>().CopyTo(paths);
-    //
-    //             ProcessAudioPaths(paths, count);
-    //         }
-    //     }
-    //
-    //     //trace rays if there are audio sources
-    //     if (registeredAudioSources.Count > 0 && isTracing == false)
-    //     {
-    //         isTracing = true;
-    //
-    //         SetupSourceBuffer();
-    //
-    //         audioShader.Dispatch(resetCounterKernel, 1, 1, 1);
-    //
-    //         audioShader.Dispatch(traceKernel, initialRays / 64, 1, 1);
-    //
-    //         pathCounterRequest = AsyncGPUReadback.Request(pathCounterBuffer);
-    //         pathDataRequest = AsyncGPUReadback.Request(pathBuffer);
-    //     }
-    //
-    //     // "garbage collect" delayed sounds
-    //     CleanSounds();
-    // }
-
-    // private void OnDestroy()
-    // {
-    //     pathBuffer?.Release();
-    //     sourcesBuffer?.Release();
-    //     debugBuffer?.Release();
-    //     instancesBuffer?.Release();
-    //     materialsBuffer?.Release();
-    //     rayBuffer?.Release();
-    //     pathCounterBuffer?.Release();
-    // }
-
-    void UpdateMaterialsAndInstances()
+    void InitializeStaticMaterials()
     {
-        //materials
         var materials = ObjectRegistry<MaterialData>.Instance.GetValues();
-
-        if (materialsBuffer == null || materialsBuffer.count != materials.Length)
-        {
-            materialsBuffer?.Release();
-            materialsBuffer = new ComputeBuffer(materials.Length, Marshal.SizeOf(typeof(MaterialData)));
-            audioShader.SetBuffer(traceKernel, "materials", materialsBuffer);
-        }
-
+        materialsBuffer?.Release();
+        materialsBuffer = new ComputeBuffer(materials.Length, Marshal.SizeOf(typeof(MaterialData)));
         materialsBuffer.SetData(materials);
+        audioShader.SetBuffer(traceKernel, "materials", materialsBuffer);
+    }
+
+    void UpdateInstances(bool forceUpdate)
+    {
+        if (!forceUpdate) return;
 
         var instances = ObjectRegistry<Instance>.Instance.GetValues();
-        // Reallocate if count changes
         if (instancesBuffer == null || instancesBuffer.count != instances.Length)
         {
             instancesBuffer?.Release();
             instancesBuffer = new ComputeBuffer(instances.Length, Marshal.SizeOf(typeof(Instance)));
-
             audioShader.SetBuffer(traceKernel, "objectInstances", instancesBuffer);
         }
 
@@ -334,104 +261,7 @@ public class AudioManager : MonoBehaviour
             }
         }
     }
-    // void ProcessAudioPaths(PathData[] paths, uint counter)
-    // {
-    //     using (processFrameMarker.Auto())
-    //     {
-    //         sourcesToRemove.Clear();
-    //         pathsBySource.Clear();
-    //         
-    //         //first we clean up this frame's data
-    //         foreach (var audioSource in registeredAudioSources.Values)
-    //         {
-    //             audioSource.frameGain = 0f;
-    //             audioSource.frameDistance = float.MaxValue;
-    //         }
-    //
-    //         
-    //
-    //         for (int i = 0; i < counter; i++)
-    //         {
-    //             var path = paths[i];
-    //             if (!pathsBySource.TryGetValue(path.sourceId, out var list))
-    //             {
-    //                 list = new List<PathData>();
-    //                 pathsBySource[path.sourceId] = list;
-    //             }
-    //
-    //             list.Add(path);
-    //
-    //             // we accumulate per path the gain and the relevant data for each source
-    //             if (registeredAudioSources.TryGetValue(path.sourceId, out var source))
-    //             {
-    //                 source.frameGain += path.totalGain();
-    //                 if (path.distance < source.frameDistance)
-    //                 {
-    //                     source.frameDistance = path.distance;
-    //                 }
-    //             }
-    //         }
-    //
-    //         // we apply this data to each source
-    //         foreach (var source in registeredAudioSources.Values)
-    //         {
-    //             float delaySeconds = source.frameDistance / 343.0f;
-    //             float timeOfArrival = source.timeOfEmission + delaySeconds;
-    //             float elapsedTime = Time.time - timeOfArrival;
-    //
-    //             if (pathsBySource.TryGetValue(source.gameObject.GetInstanceID(), out var sourcePaths))
-    //             {
-    //                 PathData[] finalPaths = new PathData[sourcePaths.Count];
-    //                 sourcePaths.CopyTo(finalPaths);
-    //                 source.UpdateReflections(finalPaths);
-    //             }
-    //             else
-    //             {
-    //                 var emptyList = Array.Empty<PathData>();
-    //                 source.UpdateReflections(emptyList);
-    //             }
-    //
-    //             if (Time.time >= timeOfArrival)
-    //             {
-    //                 //the sound played
-    //                 if (!source.audioSource.loop && elapsedTime >= source.audioSource.clip.length)
-    //                 {
-    //                     sourcesToRemove.Add(source.gameObject.GetInstanceID());
-    //                     continue;
-    //                 }
-    //
-    //                 if (!source.audioSource.isPlaying)
-    //                 {
-    //                     source.audioSource.time = elapsedTime % source.audioSource.clip.length;
-    //                     source.audioSource.Play(); //.PlayOneShot(source.audioSource.clip, source.volume);
-    //                 }
-    //             }
-    //         }
-    //     }
-    // }
-
-    //fix this ugly mess. 
-    // void SetupSourceBuffer()
-    // {
-    //     // it can be done better...
-    //     SourceData[] sourceDataArray = new SourceData[registeredAudioSources.Count];
-    //     var values = registeredAudioSources.Values.ToArray();
-    //     for (int i = 0; i < values.Length; i++)
-    //     {
-    //         sourceDataArray[i] = new SourceData()
-    //         {
-    //             origin = values[i].transform.position,
-    //             sourceId = values[i].gameObject.GetInstanceID(),
-    //             radius = values[i].radius,
-    //             maxAudibleDistance = values[i].maxAudibleDistance,
-    //             minAudibleDistance = values[i].minAudibleDistance,
-    //             power = values[i].baseAmplitudeWeighted
-    //         };
-    //     }
-    //
-    //     sourcesBuffer.SetData(sourceDataArray);
-    //     audioShader.SetInt("sourceCount", sourceDataArray.Length);
-    // }
+    
     void SetupSourceBuffer()
     {
         // Cache the array order for this specific frame
@@ -459,30 +289,31 @@ public class AudioManager : MonoBehaviour
     //this is to know if a source needs to taken into consideration
     public void RegisterAudio(AcousticSource acousticSource)
     {
-        registeredAudioSources.TryAdd(acousticSource.gameObject.GetInstanceID(), acousticSource);
+        if (registeredAudioSources.TryAdd(acousticSource.gameObject.GetInstanceID(), acousticSource))
+        {
+            sourcesDirty = true;
+        }
     }
 
     private void CleanSounds()
     {
+        bool removedAny = false;
         for (int i = 0; i < sourcesToRemove.Count; i++)
         {
             int id = sourcesToRemove[i];
-        
-            // DEFENSIVE FIX: Check if the source is still registered in our live dictionary
             if (registeredAudioSources.TryGetValue(id, out var source))
             {
-                // Ensure the Unity object reference hasn't been completely destroyed
-                if (source)
-                {
-                    source.UnRegisterSound();
-                }
-            
-                // Safely remove it from tracking
+                if (source) source.UnRegisterSound();
                 registeredAudioSources.Remove(id);
+                removedAny = true;
             }
         }
-
         sourcesToRemove.Clear();
+    
+        if (removedAny) 
+        {
+            sourcesDirty = true;
+        }
     }
 
 

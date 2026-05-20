@@ -59,10 +59,10 @@ namespace Code.Data
     [StructLayout(LayoutKind.Sequential)]
     public struct DebugInfo
     {
-        public int counter;
-        public int counter2;
+        public float3 o;
+        public float3 d;
 
-        public Vector2 padding;
+        public float2 padding;
     }
     
     [StructLayout(LayoutKind.Sequential)]
@@ -135,69 +135,13 @@ namespace Code.Data
     [StructLayout(LayoutKind.Sequential)]
     public struct MaterialData
     {
-        public float absorption0;
-        public float absorption1;
-        public float absorption2;
-        public float absorption3;
-        public float absorption4;
-        public float absorption5;
+        public float3 absorptionLowMid;
+        public float3 absorptionMidHigh;
 
-        public float transmission0;
-        public float transmission1;
-        public float transmission2;
-        
+        public float3 transmission;
+
         public float scattering;
-
         public float2 padding;
-        
-        
-        public float GetAbsorption(int bandIndex)
-        {
-            return bandIndex switch
-            {
-                0 => absorption0,
-                1 => absorption1,
-                2 => absorption2,
-                3 => absorption3,
-                4 => absorption4,
-                5 => absorption5,
-                _ => 0f
-            };
-        }
-    }
-    
-    //this one keeps track of the early reflections
-    public struct Reflection : IComparable<Reflection>
-    {
-        public int delaySamples;
-        
-        public float energy0;
-        public float energy1;
-        public float energy2;
-        public float energy3;
-        public float energy4;
-        public float energy5;
-        
-        public float2 arrivalAngles;
-        
-        public int CompareTo(Reflection other)
-        {
-            return delaySamples.CompareTo(other.delaySamples);
-        }
-        
-        public float GetEnergy(int bandIndex)
-        {
-            return bandIndex switch
-            {
-                0 => energy0,
-                1 => energy1,
-                2 => energy2,
-                3 => energy3,
-                4 => energy4,
-                5 => energy5,
-                _ => 0f
-            };
-        }
     }
     
     public struct FilterCoefficients

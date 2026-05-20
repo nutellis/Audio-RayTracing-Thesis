@@ -57,7 +57,7 @@ public class BVHManager : MonoBehaviour
     private AcousticBase[] allObjects;
     
     public int bins = 8;
-    private bool needsRefit = true;
+    public bool needsRefit = true;
     
     public bool showDebug;
 

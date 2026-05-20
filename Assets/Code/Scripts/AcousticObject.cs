@@ -26,18 +26,21 @@ public class AcousticObject : AcousticBase
            {
                material = new MaterialData
                {
-                   absorption0 = acousticMaterial.absorptionCoefficients[0],
-                   absorption1 = acousticMaterial.absorptionCoefficients[1],
-                   absorption2 = acousticMaterial.absorptionCoefficients[2],
-                   absorption3 = acousticMaterial.absorptionCoefficients[3],
-                   absorption4 = acousticMaterial.absorptionCoefficients[4],
-                   absorption5 = acousticMaterial.absorptionCoefficients[5],
+                   absorptionLowMid = new float3(
+                       acousticMaterial.absorptionCoefficients[0], 
+                       acousticMaterial.absorptionCoefficients[1], 
+                       acousticMaterial.absorptionCoefficients[2]),
+                   absorptionMidHigh = new float3(
+                       acousticMaterial.absorptionCoefficients[3], 
+                       acousticMaterial.absorptionCoefficients[4], 
+                       acousticMaterial.absorptionCoefficients[5]),
                 
                    scattering = acousticMaterial.scattering,
                    
-                   transmission0 = acousticMaterial.transmissionCoefficients[0],
-                   transmission1 = acousticMaterial.transmissionCoefficients[1],
-                   transmission2 = acousticMaterial.transmissionCoefficients[2],
+                   transmission = new float3(
+                       acousticMaterial.transmissionCoefficients[0],
+                       acousticMaterial.transmissionCoefficients[1],
+                       acousticMaterial.transmissionCoefficients[2]),
                    
                    padding = new float2(0.0f, 0.0f)
                };
