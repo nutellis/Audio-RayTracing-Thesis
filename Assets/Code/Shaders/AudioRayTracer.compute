@@ -9,8 +9,6 @@
 #define MAX_BINS 800 // 800 bins * 2.5ms = 2.0 seconds of audio tracking
 
 float deltaTime;
-uint frameCount;
-
 
 cbuffer GenericBuffer
 {
@@ -20,8 +18,10 @@ cbuffer GenericBuffer
     
     int listenerId;
     int initialRays;
+
+    uint frameCount;
     
-    float2 padding;
+    float padding;
 };
 
 struct DebugInfo

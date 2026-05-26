@@ -336,7 +336,8 @@ public class AudioManager : MonoBehaviour
         audioShader.SetVector("listenerRight", listener.transform.right);
         audioShader.SetInt("listenerId", listener.gameObject.GetInstanceID());
         audioShader.SetInt("initialRays", initialRays);
-        audioShader.SetFloats("padding", 0.0f, 0.0f);
+        audioShader.SetInt("frameCount", Time.frameCount);
+        audioShader.SetFloat("padding", 0.0f);
     }
 
 
