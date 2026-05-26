@@ -670,6 +670,7 @@ GameObject:
   - component: {fileID: 1000262842}
   - component: {fileID: 1000262840}
   - component: {fileID: 1000262839}
+  - component: {fileID: 1000262843}
   m_Layer: 0
   m_Name: ManualFilter
   m_TagString: Untagged
@@ -688,7 +689,7 @@ AudioSource:
   serializedVersion: 4
   OutputAudioMixerGroup: {fileID: 0}
   m_audioClip: {fileID: 0}
-  m_Resource: {fileID: 8300000, guid: 3f082f88ac2ab204abcc8b45cc182a86, type: 3}
+  m_Resource: {fileID: 8300000, guid: cbebf2734ca4f8d4cbbbdeee66b0e944, type: 3}
   m_PlayOnAwake: 1
   m_Volume: 1
   m_Pitch: 1
@@ -827,6 +828,27 @@ MonoBehaviour:
   - 1000
   - 2000
   - 4000
+--- !u!114 &1000262843
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 1000262838}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: ad249629bd00d804da4031266b056ee0, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::AudioRecorderToCSV
+  amplitudeThreshold: 0
+  silenceFramesToStop: 48000
+  fileName: audio_recording.csv
+  receiverName: 
+  sampleStride: 1
+  averageChannels: 1
+  autoStart: 1
+  saveToAssetsFolder: 1
+  writeTimeAsSampleIndex: 1
 --- !u!1 &1823688464
 GameObject:
   m_ObjectHideFlags: 0

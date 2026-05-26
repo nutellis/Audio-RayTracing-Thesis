@@ -14,6 +14,6 @@ public class FrequencyRange
         // Third-octave bandwidth calculation: BW = f * (2^(1/6) - 2^(-1/6))
         bandWidth = freq * thirdOctaveFactor;
 
-        Debug.Log("FrequencyRange created for " + freq + " Hz: Center = " + centerFreq + " Hz, Bandwidth = " + bandWidth + " Hz");
+        // Debug.Log("FrequencyRange created for " + freq + " Hz: Center = " + centerFreq + " Hz, Bandwidth = " + bandWidth + " Hz");
     }
 }
