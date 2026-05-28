@@ -46,7 +46,7 @@ public class AudioManager : MonoBehaviour
     public float bandwidth = 100f;
     private const float thirdOctaveFactor = 0.23156333016903374f; // Precomputed value for (2^(1/6) - 2^(-1/6))
 
-    private const int MAX_BINS = 800; // 2.0s at 2.5ms resolution
+    private const int MAX_BINS = 1600; // 4.0s at 2.5ms resolution
     private const int MAX_SOURCES = 64; // Matches your sourcesBuffer size
     private int totalEchogramSize = MAX_SOURCES * MAX_BINS;
     GraphicsBuffer echogramBuffer;
@@ -153,13 +153,12 @@ public class AudioManager : MonoBehaviour
             isTracing = true;
 
             // ONLY upload the buffer if something changed
-            if (sourcesDirty)
-            {
+            // if (sourcesDirty)
+            // {
                 SetupSourceBuffer();
-                sourcesDirty = false; // Clear the flag after upload
-            }
-
-            // Wipe the VRAM buffer clean via GPU kernel
+            //     sourcesDirty = false; // Clear the flag after upload
+            // }
+            
             int clearThreads = Mathf.CeilToInt(totalEchogramSize / 64f);
             audioShader.Dispatch(echogramResetKernel, clearThreads, 1, 1);
 

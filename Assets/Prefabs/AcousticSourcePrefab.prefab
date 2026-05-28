@@ -14,6 +14,7 @@ GameObject:
   - component: {fileID: 645352698960719863}
   - component: {fileID: 888844346557568618}
   - component: {fileID: 6490739138572204977}
+  - component: {fileID: 395934889816458997}
   m_Layer: 0
   m_Name: AcousticSourcePrefab
   m_TagString: Untagged
@@ -132,7 +133,6 @@ MonoBehaviour:
   baseAmplitudeWeighted: 0
   timeOfEmission: 0
   radius: 0
-  frameGain: 0
   frameDistance: 0
   maxAudibleDistance: 0
   minAudibleDistance: 0
@@ -234,3 +234,26 @@ AudioSource:
     m_PreInfinity: 2
     m_PostInfinity: 2
     m_RotationOrder: 4
+--- !u!164 &395934889816458997
+AudioReverbFilter:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 6005852306604373061}
+  m_Enabled: 0
+  m_DryLevel: 0
+  m_Room: 0
+  m_RoomHF: 0
+  m_DecayTime: 1
+  m_DecayHFRatio: 0.5
+  m_ReflectionsLevel: -10000
+  m_ReverbLevel: 0
+  m_ReverbDelay: 0.04
+  m_Diffusion: 100
+  m_Density: 100
+  m_HFReference: 5000
+  m_RoomLF: 0
+  m_LFReference: 250
+  m_ReflectionsDelay: 0
+  m_ReverbPreset: 27

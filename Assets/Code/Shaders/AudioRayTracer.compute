@@ -6,7 +6,7 @@
 #define INF 1e30
 #define PI 3.14159265359
 
-#define MAX_BINS 800 // 800 bins * 2.5ms = 2.0 seconds of audio tracking
+#define MAX_BINS 1600 // 1600 bins * 2.5ms = 2.0 seconds of audio tracking
 
 float deltaTime;
 
@@ -561,7 +561,8 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
             float maxSurvived = max(transmitted[0], max(transmitted[1], transmitted[2]));
             if (maxSurvived > 0.01) 
             {
-                float gain = source.power * (source.minAudibleDistance / max(source.minAudibleDistance, dist));
+                float pressureFalloff = source.minAudibleDistance / max(source.minAudibleDistance, dist);
+                float gain = source.power * (pressureFalloff * pressureFalloff);
                 
                 // Calculate which 2.5ms bin this belongs in
                 float pathTime = dist / 343.0f;
@@ -576,12 +577,12 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
                     float3 eLowMid  = gain * transLowMid;
                     float3 eMidHigh = gain * transMidHigh;
 
-                    InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(eLowMid.x  * 100000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(eLowMid.y  * 100000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(eLowMid.z  * 100000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(eMidHigh.x * 100000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(eMidHigh.y * 100000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(eMidHigh.z * 100000.0f));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(eLowMid.x  * 1000.0f));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(eLowMid.y  * 1000.0f));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(eLowMid.z  * 1000.0f));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(eMidHigh.x * 1000.0f));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(eMidHigh.y * 1000.0f));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(eMidHigh.z * 1000.0f));
                 }
            }
         }
@@ -612,7 +613,11 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
             SourceData source = sources[hitSourceIndex];
             float finalDist = totalDistance + closestSourceDist + source.radius;
             float d_min = source.minAudibleDistance; 
-            float gain = source.power * (d_min / max(d_min, finalDist));
+            
+            float pressureFalloff = d_min / max(d_min, finalDist);
+            float gain = source.power * (pressureFalloff * pressureFalloff);
+            
+            
             
             float pathTime = finalDist / 343.0f;
             uint binIndex = (uint)(pathTime / 0.0025f);
@@ -620,13 +625,13 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
             if (binIndex < MAX_BINS)
             {
                 uint flatIndex = hitSourceIndex * MAX_BINS + binIndex;
-
-                InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(energyLowMid.x  * gain * 100000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(energyLowMid.y  * gain * 100000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(energyLowMid.z  * gain * 100000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(energyMidHigh.x * gain * 100000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(energyMidHigh.y * gain * 100000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(energyMidHigh.z * gain * 100000.0f));
+    
+                InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(energyLowMid.x  * gain * 1000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(energyLowMid.y  * gain * 1000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(energyLowMid.z  * gain * 1000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(energyMidHigh.x * gain * 1000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(energyMidHigh.y * gain * 1000.0f));
+                InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(energyMidHigh.z * gain * 1000.0f));
             }
         }
         
@@ -664,7 +669,9 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
                 {
                     float pathDist = totalDistance + distToSource;
                     float d_min = source.minAudibleDistance; 
-                    float gain = source.power * (d_min / max(d_min, pathDist));
+                    
+                    float pressureFalloff = d_min / max(d_min, pathDist);
+                    float gain = source.power * (pressureFalloff * pressureFalloff);
                     
                     float pathTime = pathDist / 343.0f;
                     uint binIndex = (uint)(pathTime / 0.0025f);
@@ -673,33 +680,32 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
                     {
                         uint flatIndex = (i * MAX_BINS) + binIndex;
                         
-                        float cosTheta = max(0.0f, dot(hit.surfaceNormal, dirToSource));
-                        
-                        float diffuseSpreading = cosTheta / (2.0f * PI * distToSource * distToSource);
+                        float cosTheta = max(0.0f, dot(hit.surfaceNormal, dirToSource));                        
+                        float diffuseSpreading = cosTheta / PI;
                         
                         float baseCalc = mat.scattering * gain * diffuseSpreading;
                         
                         float3 transLowMid  = float3(transmitted.x, transmitted.x, transmitted.y);
                         float3 transMidHigh = float3(transmitted.y, transmitted.z, transmitted.z);
-
+    
                         float3 eLowMid  = energyLowMid  * (1.0 - mat.absorptionLowMid)  * baseCalc * transLowMid;
                         float3 eMidHigh = energyMidHigh * (1.0 - mat.absorptionMidHigh) * baseCalc * transMidHigh;
-
+    
                         // Write to the buffer
-                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(eLowMid.x  * 100000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(eLowMid.y  * 100000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(eLowMid.z  * 100000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(eMidHigh.x * 100000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(eMidHigh.y * 100000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(eMidHigh.z * 100000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(eLowMid.x  * 1000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(eLowMid.y  * 1000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(eLowMid.z  * 1000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(eMidHigh.x * 1000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(eMidHigh.y * 1000.0f));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(eMidHigh.z * 1000.0f));
                     }
                 }
             }
         }
+        
         //update energy for the next bounce 
-
         float scatterFactor = 1.0 - mat.scattering;
-
+    
         energyLowMid  *= (1.0 - mat.absorptionLowMid)  * scatterFactor;
         energyMidHigh *= (1.0 - mat.absorptionMidHigh) * scatterFactor;
         
