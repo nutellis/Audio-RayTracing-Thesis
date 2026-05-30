@@ -1,12 +1,27 @@
 
 #pragma kernel InitRays
 #pragma kernel TraceRays
+#pragma kernel TraceDirectSound
 #pragma kernel ResetEchogram
 
 #define INF 1e30
 #define PI 3.14159265359
 
-#define MAX_BINS 1600 // 1600 bins * 2.5ms = 2.0 seconds of audio tracking
+#define MAX_BINS 800 
+
+#define ATOMIC_ADD_FLOAT(dest, val) \
+{ \
+uint compare, original = dest; \
+[allow_uav_condition] \
+while (true) \
+{ \
+compare = original; \
+uint newVal = asuint(asfloat(compare) + (val)); \
+InterlockedCompareExchange(dest, compare, newVal, original); \
+if (original == compare) break; \
+} \
+}
+
 
 float deltaTime;
 
@@ -135,6 +150,14 @@ struct SourceData
 };
 StructuredBuffer<SourceData> sources;
 int sourceCount;
+
+struct DirectAudioData 
+{
+    float transmissionMultiplier;
+    float delayMs;
+};
+
+RWStructuredBuffer<DirectAudioData> directAudioOutput;
 
 struct MacroBin
 {
@@ -542,53 +565,7 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
     arrivalAngles.x = dot(firstDir, listenerRight.xyz); // Lateral
     arrivalAngles.y = dot(firstDir, float3(0, 1, 0));    // Elevation
     
-    //direct sound
-    if (id.x == 0)
-    {
-        // i call these direct rays but they are not "rays"
-        for (int i = 0; i < sourceCount; i++)
-        {
-            SourceData source = sources[i];
-            float3 toSource = source.origin - listenerPosition.xyz;
-            float dist = length(toSource);
-            if (dist < 0.001) continue;
-            float3 dir = toSource / dist;
-            
-            // Check if path to a sound source is clear
-            float3 transmitted = float3(1.0, 1.0, 1.0);
-            Transmit(listenerPosition.xyz, dir, dist, source.sourceId, transmitted);
-            
-            float maxSurvived = max(transmitted[0], max(transmitted[1], transmitted[2]));
-            if (maxSurvived > 0.01) 
-            {
-                float pressureFalloff = source.minAudibleDistance / max(source.minAudibleDistance, dist);
-                float gain = source.power * (pressureFalloff * pressureFalloff);
-                
-                // Calculate which 2.5ms bin this belongs in
-                float pathTime = dist / 343.0f;
-                uint binIndex = (uint)(pathTime / 0.0025f);
-                if (binIndex < MAX_BINS)
-                {
-                    uint flatIndex = (i * MAX_BINS) + binIndex;
-                    
-                    float3 transLowMid  = float3(transmitted.x, transmitted.x, transmitted.y);
-                    float3 transMidHigh = float3(transmitted.y, transmitted.z, transmitted.z);
-
-                    float3 eLowMid  = gain * transLowMid;
-                    float3 eMidHigh = gain * transMidHigh;
-
-                    InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(eLowMid.x  * 1000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(eLowMid.y  * 1000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(eLowMid.z  * 1000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(eMidHigh.x * 1000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(eMidHigh.y * 1000.0f));
-                    InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(eMidHigh.z * 1000.0f));
-                }
-           }
-        }
-    }
-    
-    for (int bounce = 0; bounce < 16; bounce++)
+    for (int bounce = 0; bounce < 32; bounce++)
     {
         float closestSourceDist = INF;
         int hitSourceIndex = -1;
@@ -617,21 +594,19 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
             float pressureFalloff = d_min / max(d_min, finalDist);
             float gain = source.power * (pressureFalloff * pressureFalloff);
             
-            
-            
             float pathTime = finalDist / 343.0f;
             uint binIndex = (uint)(pathTime / 0.0025f);
                 
             if (binIndex < MAX_BINS)
             {
                 uint flatIndex = hitSourceIndex * MAX_BINS + binIndex;
-    
-                InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(energyLowMid.x  * gain * 1000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(energyLowMid.y  * gain * 1000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(energyLowMid.z  * gain * 1000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(energyMidHigh.x * gain * 1000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(energyMidHigh.y * gain * 1000.0f));
-                InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(energyMidHigh.z * gain * 1000.0f));
+
+                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy0, energyLowMid.x * gain);
+                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy1, energyLowMid.y * gain);
+                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy2, energyLowMid.z * gain);
+                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy3, energyMidHigh.x * gain);
+                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy4, energyMidHigh.y * gain);
+                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy5, energyMidHigh.z * gain);
             }
         }
         
@@ -690,14 +665,14 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
     
                         float3 eLowMid  = energyLowMid  * (1.0 - mat.absorptionLowMid)  * baseCalc * transLowMid;
                         float3 eMidHigh = energyMidHigh * (1.0 - mat.absorptionMidHigh) * baseCalc * transMidHigh;
-    
-                        // Write to the buffer
-                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (uint)(eLowMid.x  * 1000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy1, (uint)(eLowMid.y  * 1000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy2, (uint)(eLowMid.z  * 1000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy3, (uint)(eMidHigh.x * 1000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy4, (uint)(eMidHigh.y * 1000.0f));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy5, (uint)(eMidHigh.z * 1000.0f));
+                        
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy0, eLowMid.x * gain);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy1, eLowMid.y * gain);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy2, eLowMid.z * gain);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy3, eMidHigh.x * gain);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy4, eMidHigh.y * gain);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy5, eMidHigh.z * gain);
+                        
                     }
                 }
             }
@@ -706,8 +681,8 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         //update energy for the next bounce 
         float scatterFactor = 1.0 - mat.scattering;
     
-        energyLowMid  *= (1.0 - mat.absorptionLowMid)  * scatterFactor;
-        energyMidHigh *= (1.0 - mat.absorptionMidHigh) * scatterFactor;
+        energyLowMid  *= (1.0 - mat.absorptionLowMid);
+        energyMidHigh *= (1.0 - mat.absorptionMidHigh);
         
         // REFLECT 
         currentPos = (currentPos + currentDir * hit.distance) + (hit.surfaceNormal * 0.001);
@@ -728,6 +703,36 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         currentDir = normalize(currentDir);
     }
 }
+
+[numthreads(64, 1, 1)]
+void TraceDirectSound(uint3 id : SV_DispatchThreadID)
+{
+    uint sourceIndex = id.x;
+    
+    if (sourceIndex >= sourceCount) return;
+
+    SourceData source = sources[sourceIndex];
+    float3 toSource = source.origin - listenerPosition.xyz;
+    float dist = length(toSource);
+    
+    if (dist < 0.001) 
+    {
+        directAudioOutput[sourceIndex].transmissionMultiplier = 1.0;
+        directAudioOutput[sourceIndex].delayMs = 0.0;
+        return;
+    }
+
+    float3 dir = toSource / dist;
+    
+    float3 transmitted = float3(1.0, 1.0, 1.0);
+    Transmit(listenerPosition.xyz, dir, dist, source.sourceId, transmitted);
+    
+    float finalTransmission = (transmitted.x + transmitted.y + transmitted.z) / 3.0;
+
+    directAudioOutput[sourceIndex].transmissionMultiplier = finalTransmission;
+    directAudioOutput[sourceIndex].delayMs = (dist / 343.0) * 1000.0;
+}
+
 
 [numthreads(64,1,1)]
 void ResetEchogram(uint3 id : SV_DispatchThreadID)

@@ -28,12 +28,15 @@ public class AcousticSource : MonoBehaviour
 
     private FilterCoefficients[] cachedCoefficients;
 
-    // --- NEW NATIVE CONVOLUTION DATA STRUCTS ---
     private NativeConvolver nativeConvolver;
     private float[] monoInputBuffer;
     private float[] monoWetBuffer;
     private bool hasBakedRIR = false;
     private bool isBakingIR = false;
+    
+    private float[] schroederCurve = new float[800];
+    private float previousDistance = 0f;
+    private readonly object dspLock = new object();
 
     private void OnEnable()
     {
@@ -49,6 +52,16 @@ public class AcousticSource : MonoBehaviour
     {
         Dispose();
     }
+
+    private void Update()
+    {
+        sourceDb = (sourceDb > 0) ? sourceDb : profile.dbLevel;
+
+        baseAmplitude = math.pow(10f, (sourceDb - 60f) / 20f);
+        baseAmplitudeWeighted = baseAmplitude * profile.acousticWeight;
+        
+        CalculateDistances();
+    }
     
     private void Initialize()
     {
@@ -62,7 +75,6 @@ public class AcousticSource : MonoBehaviour
         var collider = gameObject.GetComponent<SphereCollider>();
         radius = collider ? collider.radius : 1f;
 
-        // Initialize our fast unmanaged C++ plugin engine instance
         nativeConvolver = new NativeConvolver();
         hasBakedRIR = false;
         isBakingIR = false;
@@ -70,7 +82,6 @@ public class AcousticSource : MonoBehaviour
     
     private void Dispose()
     {  
-        // Clean up the native unmanaged plugin block to avoid severe memory leaks
         if (nativeConvolver != null)
         {
             nativeConvolver.Dispose();
@@ -116,102 +127,197 @@ public class AcousticSource : MonoBehaviour
         this.enabled = false;
     }
     
-    // Receives the GPU pre-sorted 2.5ms slice from AudioManager
-    public async void UpdateReflections(MacroBin[] sourceSlice)
+
+public async void UpdateFrameData(MacroBin[] sourceSlice, DirectAudioData directData)
+{
+    if (isBakingIR || nativeConvolver == null) return;
+
+    var audioManager = FindFirstObjectByType<AudioManager>();
+    if (!audioManager) return;
+
+    isBakingIR = true;
+    
+    float distance = Vector3.Distance(transform.position, audioManager.listener.transform.position);
+    float distanceGain = 1.0f / math.max(distance, 1.0f);
+    
+    directGain = distanceGain * directData.transmissionMultiplier * profile.acousticWeight;
+    audioSource.volume = math.clamp(this.directGain, 0f, 1f);
+    
+    float radialVelocity = (distance - previousDistance) / Time.deltaTime;
+    previousDistance = distance;
+    
+    float pitchShift = 343.0f / (343.0f + (radialVelocity * 0.5f));
+    audioSource.pitch = math.clamp(pitchShift, 0.5f, 2.0f);
+    
+    int totalBins = sourceSlice.Length;
+    int earlyBinCount = math.min(32, totalBins); // this doesnt work great for bigger rooms
+    
+    AcousticData[] earlyEnergies = new AcousticData[earlyBinCount];
+    float rayNormalization = 1.0f / audioManager.initialRays;
+
+    
+    for (int i = 0; i < earlyBinCount; i++)
     {
-        bool directSoundFound = false;
+        if (sourceSlice[i].energy0 == 0 && sourceSlice[i].energy1 == 0 && sourceSlice[i].energy2 == 0) continue;
         
-        // Drop the update frame if the background thread is still busy cooking the last one
-        if (isBakingIR || nativeConvolver == null) return;
+        float pE0 = sourceSlice[i].energy0 * rayNormalization;
+        float pE1 = sourceSlice[i].energy1 * rayNormalization;
+        float pE2 = sourceSlice[i].energy2 * rayNormalization;
+        float pE3 = sourceSlice[i].energy3 * rayNormalization;
+        float pE4 = sourceSlice[i].energy4 * rayNormalization;
+        float pE5 = sourceSlice[i].energy5 * rayNormalization;
 
-        // 1. Fetch the total ray count from the AudioManager for normalization
-        var audioManager = FindFirstObjectByType<AudioManager>();
-        if (!audioManager) return;
+        float binDistance = (i * 0.0025f) * 343.0f;
+        AirAbsorption.ApplyAbsorption(ref pE0, ref pE1, ref pE2, ref pE3, ref pE4, ref pE5, binDistance);
     
-        int initialRays = audioManager.initialRays;
-        // Each ray carries a 1/N fraction of the total acoustic energy
-        float rayNormalization = 1.0f / initialRays;
+        earlyEnergies[i] = new AcousticData 
+        { 
+            energy0 = pE0, energy1 = pE1, energy2 = pE2, 
+            energy3 = pE3, energy4 = pE4, energy5 = pE5 
+        };
+    }
+    var (estimatedRT60, estimatedDamping) = ExtractSchroederParameters(
+        sourceSlice, 
+        schroederCurve, 
+        rayNormalization, 
+        earlyBinCount
+    );
+    
+    double normalizedRT60 = math.clamp((estimatedRT60 - 0.1f) / 5.9f, 0.0f, 1.0f);
+    double mappedRoomSize = 0.0;
+    if (normalizedRT60 > 0.01)
+    {
+        mappedRoomSize = 0.3 + (normalizedRT60 * 0.98); 
+    }
+   
+    float[] bakedEarlyRIR = await RIRSynthesizer.BakeImpulseResponseAsync(earlyEnergies, cachedCoefficients);
 
-        isBakingIR = true;
-
-        // Apply physical air absorption attenuation directly across our 800 buckets
-        for (int i = 0; i < sourceSlice.Length; i++)
+    if (nativeConvolver != null)
+    {
+        lock (dspLock) 
         {
-            if (sourceSlice[i].energy0 == 0 && sourceSlice[i].energy1 == 0 && sourceSlice[i].energy2 == 0) continue;
-
-            float pE0 = ((float)sourceSlice[i].energy0 / 1000.0f) * rayNormalization;
-            float pE1 = ((float)sourceSlice[i].energy1 / 1000.0f) * rayNormalization;
-            float pE2 = ((float)sourceSlice[i].energy2 / 1000.0f) * rayNormalization;
-            float pE3 = ((float)sourceSlice[i].energy3 / 1000.0f) * rayNormalization;
-            float pE4 = ((float)sourceSlice[i].energy4 / 1000.0f) * rayNormalization;
-            float pE5 = ((float)sourceSlice[i].energy5 / 1000.0f) * rayNormalization;
-
-            float binDistance = (i * 0.0025f) * 343.0f;
-            AirAbsorption.ApplyAbsorption(ref pE0, ref pE1, ref pE2, ref pE3, ref pE4, ref pE5, binDistance);
-            
-            if (!directSoundFound)
-            {
-                float totalDirectEnergy = pE0 + pE1 + pE2 + pE3 + pE4 + pE5;
-    
-                float totalAmplitude = math.sqrt(totalDirectEnergy) * profile.acousticWeight;
-                this.directGain = math.min(totalAmplitude, 1.0f);
-    
-                directSoundFound = true;
-            }
-            
-            //to amplitude
-            float pA0 = math.sqrt(pE0);
-            float pA1 = math.sqrt(pE1);
-            float pA2 = math.sqrt(pE2);
-            float pA3 = math.sqrt(pE3);
-            float pA4 = math.sqrt(pE4);
-            float pA5 = math.sqrt(pE5);
-            
-
-            sourceSlice[i].energy0 = (uint)(pA0 *  1000.0f);
-            sourceSlice[i].energy1 = (uint)(pA1 *  1000.0f);
-            sourceSlice[i].energy2 = (uint)(pA2 *  1000.0f);
-            sourceSlice[i].energy3 = (uint)(pA3 *  1000.0f);
-            sourceSlice[i].energy4 = (uint)(pA4 *  1000.0f);
-            sourceSlice[i].energy5 = (uint)(pA5 *  1000.0f);
-        }
-
-        // Run the 6-band material response filter assembly asynchronously out-of-thread
-        float[] bakedRIR = await RIRSynthesizer.BakeImpulseResponseAsync(sourceSlice, cachedCoefficients);
-
-        if (nativeConvolver != null)
-        {
-            nativeConvolver.LoadImpulseResponse(bakedRIR);
+            nativeConvolver.LoadEarlyImpulseResponse(bakedEarlyRIR);
+            nativeConvolver.SetLateParams(mappedRoomSize, estimatedDamping);
             hasBakedRIR = true;
         }
+    }
 
-        isBakingIR = false;
+    isBakingIR = false;
+}
+
+private (float rt60, float damping) ExtractSchroederParameters(
+    MacroBin[] sourceSlice, 
+    float[] schroederCurve, 
+    float rayNormalization, 
+    int earlyBinCount)
+{
+    int totalBins = sourceSlice.Length;
+    float currentIntegral = 0f;
+    float hfIntegral = 0f;
+    int lastValidBin = earlyBinCount;
+    bool foundTailEnd = false;
+    
+    for (int i = totalBins - 1; i >= earlyBinCount; i--)
+    {
+        float pE0 = sourceSlice[i].energy0 * rayNormalization;
+        float pE1 = sourceSlice[i].energy1 * rayNormalization;
+        float pE2 = sourceSlice[i].energy2 * rayNormalization;
+        float pE3 = sourceSlice[i].energy3 * rayNormalization;
+        float pE4 = sourceSlice[i].energy4 * rayNormalization;
+        float pE5 = sourceSlice[i].energy5 * rayNormalization;
+
+        float binDistance = (i * 0.0025f) * 343.0f;
+        AirAbsorption.ApplyAbsorption(ref pE0, ref pE1, ref pE2, ref pE3, ref pE4, ref pE5, binDistance);
+
+        float binEnergy = pE0 + pE1 + pE2 + pE3 + pE4 + pE5;
+        float hfEnergy = pE4 + pE5;
+
+        currentIntegral += binEnergy;
+        hfIntegral += hfEnergy;
+
+        schroederCurve[i] = currentIntegral;
+
+        if (!foundTailEnd && currentIntegral > 1e-24f)
+        {
+            lastValidBin = i;
+            foundTailEnd = true;
+        }
+    }
+
+    float estimatedRT60 = 0.0f;
+    float estimatedDamping = 1.0f;
+
+    float maxEnergy = schroederCurve[earlyBinCount];
+    
+    if (maxEnergy > 1e-12f && lastValidBin > earlyBinCount + 10)
+    {
+        float maxDb = 10f * math.log10(maxEnergy);
+        
+        float targetStartDb = maxDb - 5f; 
+        
+        float targetEndDb = maxDb - 25f;  
+
+        int tStartIdx = -1;
+        int tEndIdx = -1;
+
+        for (int i = earlyBinCount; i <= lastValidBin; i++)
+        {
+            float currentDb = 10f * math.log10(schroederCurve[i]);
+            
+            if (tStartIdx == -1 && currentDb <= targetStartDb) tStartIdx = i;
+            
+            if (tEndIdx == -1 && currentDb <= targetEndDb)
+            {
+                tEndIdx = i;
+                break;
+            }
+        }
+
+        if (tEndIdx == -1) tEndIdx = lastValidBin;
+
+        if (tStartIdx != -1 && tEndIdx > tStartIdx)
+        {
+            float actualStartDb = 10f * math.log10(schroederCurve[tStartIdx]);
+            float actualEndDb = 10f * math.log10(schroederCurve[tEndIdx]);
+            
+            float timeDelta = (tEndIdx - tStartIdx) * 0.0025f;
+
+            if (timeDelta > 0.025f && actualStartDb > actualEndDb)
+            {
+                float slope = (actualEndDb - actualStartDb) / timeDelta;
+                estimatedRT60 = -60f / slope;
+            }
+        }
+
+        float hfRatio = hfIntegral / currentIntegral;
+        estimatedDamping = math.clamp(1.0f - (hfRatio * 2.0f), 0.0f, 1.0f);
+    }
+
+    return (estimatedRT60, estimatedDamping);
+}
+    
+void OnAudioFilterRead(float[] data, int channels)
+{
+    int frameCount = data.Length / channels;
+
+    if (monoInputBuffer == null || monoInputBuffer.Length != frameCount)
+    {
+        monoInputBuffer = new float[frameCount];
+        monoWetBuffer = new float[frameCount];
     }
     
-    
-    void OnAudioFilterRead(float[] data, int channels)
+    for (int i = 0; i < frameCount; i++)
     {
-        int frameCount = data.Length / channels;
-
-        // Ensure our processing array match Unity's runtime chunk configurations
-        if (monoInputBuffer == null || monoInputBuffer.Length != frameCount)
+        float monoInput = 0f;
+        for (int c = 0; c < channels; c++) 
         {
-            monoInputBuffer = new float[frameCount];
-            monoWetBuffer = new float[frameCount];
+            monoInput += data[i * channels + c];
         }
-        
-        // 1. Accumulate multi-channel output data into a mono mixdown array for the convolver
-        for (int i = 0; i < frameCount; i++)
-        {
-            float monoInput = 0f;
-            for (int c = 0; c < channels; c++) 
-            {
-                monoInput += data[i * channels + c];
-            }
-            monoInputBuffer[i] = monoInput / channels;
-        }
-        
-        // 2. Perform the fast frequency-domain multiplication in C++ via WDL
+        monoInputBuffer[i] = monoInput / channels; 
+    }
+    
+    lock (dspLock)
+    {
         if (nativeConvolver != null && hasBakedRIR)
         {
             nativeConvolver.Process(monoInputBuffer, monoWetBuffer);
@@ -220,26 +326,24 @@ public class AcousticSource : MonoBehaviour
         {
             Array.Clear(monoWetBuffer, 0, monoWetBuffer.Length);
         }
-        
-        float wetGainControl = 1.0f; 
+    }
+    
+    float wetGainControl = 1.0f; 
 
-        for (int i = 0; i < frameCount; i++)
+    for (int i = 0; i < frameCount; i++)
+    {
+        float wetSample = monoWetBuffer[i] * wetGainControl; 
+        
+        for (int c = 0; c < channels; c++)
         {
-            float wetSample = monoWetBuffer[i] * wetGainControl; 
-            
-            for (int c = 0; c < channels; c++)
-            {
-                float drySample = data[i * channels + c] * directGain;
-                
-                // Mix the wet room response onto every output speaker channel
-                data[i * channels + c] = math.clamp(drySample + wetSample, -1.0f, 1.0f); //
-            }
+            data[i * channels + c] += wetSample; 
         }
     }
 }
+}
 public static class AirAbsorption
 {
-    // Precomputed -alpha / 20 for each band up to 4k
+    // precomputed -alpha / 20 for each band up to 4k
     private const float c_125 = -0.001f / 20f;
     private const float c_250 = -0.002f / 20f;
     private const float c_500 = -0.005f / 20f;

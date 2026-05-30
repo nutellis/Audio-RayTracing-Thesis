@@ -6,11 +6,8 @@ using UnityEngine;
 namespace Code.Data
 {
     [StructLayout(LayoutKind.Sequential)]
-    public struct PathData 
+    public struct AcousticData 
     {
-        public float2 arrivalAngles;
-        public float distance;
-        
         //it hurts but i want to avoid unsafe
         public float energy0;
         public float energy1;
@@ -18,28 +15,24 @@ namespace Code.Data
         public float energy3;
         public float energy4;
         public float energy5;
-        
-        public float padding;
-        
-        public int sourceId;
-        public int state; // 0 = direct, 1 = reflection, 2 = ??
 
-        
-        public float totalGain()
-        {
-            return (energy0 + energy1 + energy2 + energy3 + energy4 + energy5) / 6f;
-        }
     }
     
     [StructLayout(LayoutKind.Sequential)]
     public struct MacroBin
     {
-        public uint energy0;
-        public uint energy1;
-        public uint energy2;
-        public uint energy3;
-        public uint energy4;
-        public uint energy5;
+        public float energy0; 
+        public float energy1;
+        public float energy2;
+        public float energy3;
+        public float energy4;
+        public float energy5;
+    };
+    
+    public struct DirectAudioData 
+    {
+        public float transmissionMultiplier;
+        public float delayMs;
     }
     
     [StructLayout(LayoutKind.Sequential)]
@@ -73,8 +66,6 @@ namespace Code.Data
         
         public int leftChild;
         public int rightChild;
-
-        public int parent;
         
         public int primitiveIndex;
         

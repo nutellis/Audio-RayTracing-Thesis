@@ -17,12 +17,13 @@ public class AudioManager : MonoBehaviour
     Dictionary<int, AcousticSource> registeredAudioSources; //
     List<int> sourcesToRemove = new List<int>(32);
 
-    ListenerController listener;
+    public ListenerController listener;
 
     public int maxDb = 120;
 
     int initRaysKernel;
     int traceKernel;
+    int traceDirectKernel;
     int echogramResetKernel;
     public ComputeShader audioShader;
 
@@ -36,6 +37,10 @@ public class AudioManager : MonoBehaviour
     ComputeBuffer instancesBuffer;
     ComputeBuffer materialsBuffer;
     
+    ComputeBuffer directAudioBuffer;
+    DirectAudioData[] readbackDirectData;
+    private AsyncGPUReadbackRequest directDataRequest;
+    
     private AsyncGPUReadbackRequest pathCounterRequest;
     private AsyncGPUReadbackRequest pathDataRequest;
     private bool isTracing = false;
@@ -46,13 +51,13 @@ public class AudioManager : MonoBehaviour
     public float bandwidth = 100f;
     private const float thirdOctaveFactor = 0.23156333016903374f; // Precomputed value for (2^(1/6) - 2^(-1/6))
 
-    private const int MAX_BINS = 1600; // 4.0s at 2.5ms resolution
-    private const int MAX_SOURCES = 64; // Matches your sourcesBuffer size
+    private const int MAX_BINS = 800; // 4.0s at 2.5ms resolution
+    private const int MAX_SOURCES = 64;
     private int totalEchogramSize = MAX_SOURCES * MAX_BINS;
     GraphicsBuffer echogramBuffer;
     GraphicsBuffer echogramStagingBuffer;
     MacroBin[] readbackEchogramData;
-    AcousticSource[] currentFrameSources; // Caches the exact order sent to GPU
+    AcousticSource[] currentFrameSources; 
     private AsyncGPUReadbackRequest echogramRequest;
 
     private bool sourcesDirty;
@@ -65,9 +70,9 @@ public class AudioManager : MonoBehaviour
 
         initRaysKernel = audioShader.FindKernel("InitRays");
         traceKernel = audioShader.FindKernel("TraceRays");
+        traceDirectKernel = audioShader.FindKernel("TraceDirectSound");
         echogramResetKernel = audioShader.FindKernel("ResetEchogram");
 
-        // --- NEW BUFFER INIT ---
         // 24 bytes = 6 uints * 4 bytes each
         echogramBuffer = new GraphicsBuffer(
             GraphicsBuffer.Target.Structured | GraphicsBuffer.Target.CopySource, 
@@ -83,14 +88,21 @@ public class AudioManager : MonoBehaviour
         readbackEchogramData = new MacroBin[totalEchogramSize];
         
         audioShader.SetBuffer(traceKernel, "echogramBuffer", echogramBuffer);
-        // -----------------------
 
         sourcesBuffer = new ComputeBuffer(MAX_SOURCES, Marshal.SizeOf(typeof(SourceData)));
         audioShader.SetBuffer(traceKernel, "sources", sourcesBuffer);
+        audioShader.SetBuffer(traceDirectKernel, "sources", sourcesBuffer);
 
         audioShader.SetBuffer(traceKernel, "triangleSoup", bvhManager.GetTrianglesBuffer());
         audioShader.SetBuffer(traceKernel, "blasTrees", bvhManager.GetBlasNodesBuffer());
+        
+        audioShader.SetBuffer(traceDirectKernel, "triangleSoup", bvhManager.GetTrianglesBuffer());
+        audioShader.SetBuffer(traceDirectKernel, "blasTrees", bvhManager.GetBlasNodesBuffer());
 
+        directAudioBuffer = new ComputeBuffer(MAX_SOURCES, Marshal.SizeOf(typeof(DirectAudioData)));
+        readbackDirectData = new DirectAudioData[MAX_SOURCES];
+        audioShader.SetBuffer(traceDirectKernel, "directAudioOutput", directAudioBuffer);
+        
         audioShader.SetBuffer(echogramResetKernel, "echogramBuffer", echogramBuffer);
         
         InitializeStaticMaterials();
@@ -117,6 +129,7 @@ public class AudioManager : MonoBehaviour
         rayBuffer?.Release();
         echogramBuffer?.Release();
         debugBuffer?.Release();
+        directAudioBuffer?.Release();
         echogramStagingBuffer?.Release();
     }
     
@@ -132,18 +145,19 @@ public class AudioManager : MonoBehaviour
         {
             UpdateInstances(true);
             audioShader.SetBuffer(traceKernel, "tlasTree", bvhManager.GetBVHBuffer());
+            audioShader.SetBuffer(traceDirectKernel, "tlasTree", bvhManager.GetBVHBuffer());
 
         }
-  
-        // 1. Process Finished Traces
-        if (isTracing && echogramRequest.done)
+        
+        if (isTracing && echogramRequest.done && directDataRequest.done)
         {
             isTracing = false;
-            if (!echogramRequest.hasError)
+            if (!echogramRequest.hasError && !directDataRequest.hasError)
             {
-                // Copy straight into our readback array
                 echogramRequest.GetData<MacroBin>().CopyTo(readbackEchogramData);
-                ProcessAudioPaths(readbackEchogramData);
+                directDataRequest.GetData<DirectAudioData>().CopyTo(readbackDirectData); // NEW
+                
+                ProcessAudioPaths(readbackEchogramData, readbackDirectData);
             }
         }
 
@@ -152,24 +166,25 @@ public class AudioManager : MonoBehaviour
         {
             isTracing = true;
 
-            // ONLY upload the buffer if something changed
-            // if (sourcesDirty)
-            // {
-                SetupSourceBuffer();
-            //     sourcesDirty = false; // Clear the flag after upload
-            // }
+            SetupSourceBuffer();
             
+            // Clear echogram
             int clearThreads = Mathf.CeilToInt(totalEchogramSize / 64f);
             audioShader.Dispatch(echogramResetKernel, clearThreads, 1, 1);
 
-            // Trace rays
+            //run tracer
             int threadGroups = Mathf.CeilToInt(initialRays / 64f);
             audioShader.Dispatch(traceKernel, threadGroups, 1, 1);
             
+            // run direct sound tracing
+            int directGroups = Mathf.Max(1, Mathf.CeilToInt(currentFrameSources.Length / 64f));
+            audioShader.Dispatch(traceDirectKernel, directGroups, 1, 1);
+
             Graphics.CopyBuffer(echogramBuffer, echogramStagingBuffer);
 
-            // Request readback
+            // request readbacks
             echogramRequest = AsyncGPUReadback.Request(echogramStagingBuffer);
+            directDataRequest = AsyncGPUReadback.Request(directAudioBuffer);
         }
         CleanSounds();
     }
@@ -181,6 +196,7 @@ public class AudioManager : MonoBehaviour
         materialsBuffer = new ComputeBuffer(materials.Length, Marshal.SizeOf(typeof(MaterialData)));
         materialsBuffer.SetData(materials);
         audioShader.SetBuffer(traceKernel, "materials", materialsBuffer);
+        audioShader.SetBuffer(traceDirectKernel, "materials", materialsBuffer);
     }
 
     void UpdateInstances(bool forceUpdate)
@@ -193,6 +209,7 @@ public class AudioManager : MonoBehaviour
             instancesBuffer?.Release();
             instancesBuffer = new ComputeBuffer(instances.Length, Marshal.SizeOf(typeof(Instance)));
             audioShader.SetBuffer(traceKernel, "objectInstances", instancesBuffer);
+            audioShader.SetBuffer(traceDirectKernel, "objectInstances", instancesBuffer);
         }
 
         instancesBuffer.SetData(instances);
@@ -201,7 +218,7 @@ public class AudioManager : MonoBehaviour
     static readonly ProfilerMarker processFrameMarker = new("Acoustic.ProcessAudioPaths");
 
 
-    void ProcessAudioPaths(MacroBin[] echogram)
+    void ProcessAudioPaths(MacroBin[] echogram, DirectAudioData[] directDataArray)
     {
         using (processFrameMarker.Auto())
         {
@@ -211,7 +228,6 @@ public class AudioManager : MonoBehaviour
             {
                 var source = currentFrameSources[s];
             
-                // --- ASYNC LATENCY GUARD ---
                 // If the source was destroyed, disabled, or removed while the GPU was busy, skip it!
                 if (!source || !registeredAudioSources.ContainsKey(source.gameObject.GetInstanceID()))
                 {
@@ -219,31 +235,19 @@ public class AudioManager : MonoBehaviour
                 }
                 // ----------------------------
 
-                // 1. Extract the 800-bin slice belonging to THIS source
+                //extract the slice belonging to THIS source
                 MacroBin[] sourceSlice = new MacroBin[MAX_BINS];
                 Array.Copy(echogram, s * MAX_BINS, sourceSlice, 0, MAX_BINS);
                 
-                // 2. Pass the pre-binned slice to the AcousticSource script
-                source.UpdateReflections(sourceSlice);
+                DirectAudioData directData = directDataArray[s];
+                
+                source.UpdateFrameData(sourceSlice, directData);
 
-                // 3. Find the first valid bin to calculate frameDistance for audio delay
-                source.frameDistance = float.MaxValue;
-                for(int b = 0; b < MAX_BINS; b++) 
-                {
-                    if (sourceSlice[b].energy0 > 0 || sourceSlice[b].energy1 > 0 || sourceSlice[b].energy2 > 0) 
-                    {
-                        // 0.0025s (2.5ms) * 343m/s speed of sound = 0.8575 meters per bin
-                        source.frameDistance = b * 0.8575f; 
-                        break;
-                    }
-                }
-
-                // 4. Playback Logic
-                float delaySeconds = source.frameDistance == float.MaxValue ? 0f : source.frameDistance / 343.0f;
+                float delaySeconds = directData.delayMs / 1000.0f;
                 float timeOfArrival = source.timeOfEmission + delaySeconds;
                 float elapsedTime = Time.time - timeOfArrival;
 
-                if (Time.time >= timeOfArrival && source.frameDistance != float.MaxValue)
+                if (Time.time >= timeOfArrival)
                 {
                     if (!source.audioSource.loop && elapsedTime >= source.audioSource.clip.length)
                     {

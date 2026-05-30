@@ -244,7 +244,6 @@ public class BVHManager : MonoBehaviour
         GPUTlasNode[] clearNodes = new GPUTlasNode[totalNodes];
         for (int i = 0; i < totalNodes; i++)
         {
-            clearNodes[i].parent = -1;
             clearNodes[i].leftChild = -1;
             clearNodes[i].rightChild = -1;
             clearNodes[i].primitiveIndex = -1;
