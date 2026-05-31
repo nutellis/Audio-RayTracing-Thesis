@@ -7,7 +7,7 @@
 #define INF 1e30
 #define PI 3.14159265359
 
-#define MAX_BINS 800 
+#define MAX_BINS 1600 // 1600 bins * 2.5ms = 2.0 seconds of audio tracking
 
 #define ATOMIC_ADD_FLOAT(dest, val) \
 { \
@@ -553,7 +553,6 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
 
     Ray r = rayBuffer[id.x];
 
-    // we get the current position and direction of the ray
     float3 currentPos = r.origin;
     float3 currentDir = r.direction;
     float3 firstDir = r.direction;
@@ -565,7 +564,7 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
     arrivalAngles.x = dot(firstDir, listenerRight.xyz); // Lateral
     arrivalAngles.y = dot(firstDir, float3(0, 1, 0));    // Elevation
     
-    for (int bounce = 0; bounce < 32; bounce++)
+    for (int bounce = 0; bounce < 256; bounce++)
     {
         float closestSourceDist = INF;
         int hitSourceIndex = -1;
@@ -589,10 +588,8 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         {
             SourceData source = sources[hitSourceIndex];
             float finalDist = totalDistance + closestSourceDist + source.radius;
-            float d_min = source.minAudibleDistance; 
             
-            float pressureFalloff = d_min / max(d_min, finalDist);
-            float gain = source.power * (pressureFalloff * pressureFalloff);
+            float gain = source.power;
             
             float pathTime = finalDist / 343.0f;
             uint binIndex = (uint)(pathTime / 0.0025f);
@@ -623,7 +620,7 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         float3 hitPoint = currentPos + currentDir * hit.distance;
         
         //if the material allows for diffuse scattering we use NEE https://www.cg.tuwien.ac.at/sites/default/files/course/4854/attachments/12_3_next%20event%20estimation_notes.pdf
-        if (mat.scattering > 0.1) {
+        if (mat.scattering >= 0.01) {
     
             // next event estimation (not exactly but almost) 
             for (int i = 0; i < sourceCount; i++)
@@ -643,35 +640,33 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
                 if (maxSurvived > 0.01)
                 {
                     float pathDist = totalDistance + distToSource;
-                    float d_min = source.minAudibleDistance; 
-                    
-                    float pressureFalloff = d_min / max(d_min, pathDist);
-                    float gain = source.power * (pressureFalloff * pressureFalloff);
-                    
                     float pathTime = pathDist / 343.0f;
                     uint binIndex = (uint)(pathTime / 0.0025f);
-                    
+
                     if (binIndex < MAX_BINS)
                     {
                         uint flatIndex = (i * MAX_BINS) + binIndex;
-                        
+    
+                        float solidAngle = (PI * source.radius * source.radius) / max(0.001f, distToSource * distToSource);
+    
                         float cosTheta = max(0.0f, dot(hit.surfaceNormal, dirToSource));                        
-                        float diffuseSpreading = cosTheta / PI;
-                        
-                        float baseCalc = mat.scattering * gain * diffuseSpreading;
-                        
+                        float brdf = cosTheta / PI;
+    
+                        float gain = source.power * solidAngle * brdf;
+                        float baseCalc = mat.scattering * gain;
+    
                         float3 transLowMid  = float3(transmitted.x, transmitted.x, transmitted.y);
                         float3 transMidHigh = float3(transmitted.y, transmitted.z, transmitted.z);
-    
+
                         float3 eLowMid  = energyLowMid  * (1.0 - mat.absorptionLowMid)  * baseCalc * transLowMid;
                         float3 eMidHigh = energyMidHigh * (1.0 - mat.absorptionMidHigh) * baseCalc * transMidHigh;
                         
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy0, eLowMid.x * gain);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy1, eLowMid.y * gain);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy2, eLowMid.z * gain);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy3, eMidHigh.x * gain);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy4, eMidHigh.y * gain);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy5, eMidHigh.z * gain);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy0, eLowMid.x);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy1, eLowMid.y);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy2, eLowMid.z);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy3, eMidHigh.x);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy4, eMidHigh.y);
+                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy5, eMidHigh.z);
                         
                     }
                 }
@@ -737,8 +732,8 @@ void TraceDirectSound(uint3 id : SV_DispatchThreadID)
 [numthreads(64,1,1)]
 void ResetEchogram(uint3 id : SV_DispatchThreadID)
 {
-    // totalEchogramSize = 64 * 800 = 51200
-    if (id.x >= 51200) return; 
+    // totalEchogramSize = 64 * 1600 = 102400
+    if (id.x >= 102400) return; 
 
     echogramBuffer[id.x].energy0 = 0;
     echogramBuffer[id.x].energy1 = 0;

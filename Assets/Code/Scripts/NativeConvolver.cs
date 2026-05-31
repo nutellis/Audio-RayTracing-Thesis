@@ -15,8 +15,11 @@ public class NativeConvolver : IDisposable
     private static extern void HybridReverb_SetEarlyImpulse(IntPtr instance, float[] impulse, int length);
 
     [DllImport(DLL_NAME, CallingConvention = CallingConvention.Cdecl)] 
-    private static extern void HybridReverb_SetLateParams(IntPtr instance, double mappedRT60, double absorption);
-
+    private static extern void HybridReverb_SetLateParams(IntPtr instance, double mappedRT60, double absorption, float reverbSwitch);
+    
+    [DllImport(DLL_NAME, CallingConvention = CallingConvention.Cdecl)] 
+    private static extern void HybridReverb_SetPreDelay(IntPtr instance, float preDelayMs);
+    
     [DllImport(DLL_NAME, CallingConvention = CallingConvention.Cdecl)] 
     private static extern void HybridReverb_Process(IntPtr instance, float[] input, float[] output, int numSamples);
 
@@ -35,11 +38,19 @@ public class NativeConvolver : IDisposable
         }
     }
 
-    public void SetLateParams(double mappedRT60, double absorption)
+    public void SetLateParams(double mappedRT60, double absorption, float reverbSwitch)
     {
         if (nativeInstance != IntPtr.Zero)
         {
-            HybridReverb_SetLateParams(nativeInstance, mappedRT60, absorption);
+            HybridReverb_SetLateParams(nativeInstance, mappedRT60, absorption, reverbSwitch);
+        }
+    }
+
+    public void SetPreDelay(float preDelayMs) 
+    {
+        if (nativeInstance != IntPtr.Zero) 
+        {
+            HybridReverb_SetPreDelay(nativeInstance, preDelayMs);
         }
     }
 

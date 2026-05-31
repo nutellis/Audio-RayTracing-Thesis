@@ -246,6 +246,7 @@ public class BVHManager : MonoBehaviour
         {
             clearNodes[i].leftChild = -1;
             clearNodes[i].rightChild = -1;
+            clearNodes[i].parent = -1;
             clearNodes[i].primitiveIndex = -1;
         }
 

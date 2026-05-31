@@ -51,13 +51,13 @@ public class AudioManager : MonoBehaviour
     public float bandwidth = 100f;
     private const float thirdOctaveFactor = 0.23156333016903374f; // Precomputed value for (2^(1/6) - 2^(-1/6))
 
-    private const int MAX_BINS = 800; // 4.0s at 2.5ms resolution
+    private const int MAX_BINS = 1600; // 4.0s at 2.5ms resolution
     private const int MAX_SOURCES = 64;
     private int totalEchogramSize = MAX_SOURCES * MAX_BINS;
     GraphicsBuffer echogramBuffer;
     GraphicsBuffer echogramStagingBuffer;
     MacroBin[] readbackEchogramData;
-    AcousticSource[] currentFrameSources; 
+    AcousticSource[] currentFrameSources; // Caches the exact order sent to GPU
     private AsyncGPUReadbackRequest echogramRequest;
 
     private bool sourcesDirty;

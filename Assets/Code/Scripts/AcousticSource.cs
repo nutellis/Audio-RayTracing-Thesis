@@ -2,6 +2,7 @@
 using System;
 using Code.Data;
 using Unity.Mathematics;
+using Unity.Profiling;
 using UnityEngine;
 using UnityEngine.Serialization;
 
@@ -34,7 +35,7 @@ public class AcousticSource : MonoBehaviour
     private bool hasBakedRIR = false;
     private bool isBakingIR = false;
     
-    private float[] schroederCurve = new float[800];
+    private float[] schroederCurve = new float[1600];
     private float previousDistance = 0f;
     private readonly object dspLock = new object();
 
@@ -127,82 +128,143 @@ public class AcousticSource : MonoBehaviour
         this.enabled = false;
     }
     
+    static readonly ProfilerMarker processFrameMarker = new("AcousticSource.UpdateFrame");
 
 public async void UpdateFrameData(MacroBin[] sourceSlice, DirectAudioData directData)
 {
-    if (isBakingIR || nativeConvolver == null) return;
-
-    var audioManager = FindFirstObjectByType<AudioManager>();
-    if (!audioManager) return;
-
-    isBakingIR = true;
-    
-    float distance = Vector3.Distance(transform.position, audioManager.listener.transform.position);
-    float distanceGain = 1.0f / math.max(distance, 1.0f);
-    
-    directGain = distanceGain * directData.transmissionMultiplier * profile.acousticWeight;
-    audioSource.volume = math.clamp(this.directGain, 0f, 1f);
-    
-    float radialVelocity = (distance - previousDistance) / Time.deltaTime;
-    previousDistance = distance;
-    
-    float pitchShift = 343.0f / (343.0f + (radialVelocity * 0.5f));
-    audioSource.pitch = math.clamp(pitchShift, 0.5f, 2.0f);
-    
-    int totalBins = sourceSlice.Length;
-    int earlyBinCount = math.min(32, totalBins); // this doesnt work great for bigger rooms
-    
-    AcousticData[] earlyEnergies = new AcousticData[earlyBinCount];
-    float rayNormalization = 1.0f / audioManager.initialRays;
-
-    
-    for (int i = 0; i < earlyBinCount; i++)
+    using (processFrameMarker.Auto())
     {
-        if (sourceSlice[i].energy0 == 0 && sourceSlice[i].energy1 == 0 && sourceSlice[i].energy2 == 0) continue;
-        
-        float pE0 = sourceSlice[i].energy0 * rayNormalization;
-        float pE1 = sourceSlice[i].energy1 * rayNormalization;
-        float pE2 = sourceSlice[i].energy2 * rayNormalization;
-        float pE3 = sourceSlice[i].energy3 * rayNormalization;
-        float pE4 = sourceSlice[i].energy4 * rayNormalization;
-        float pE5 = sourceSlice[i].energy5 * rayNormalization;
+        if (isBakingIR || nativeConvolver == null) return;
 
-        float binDistance = (i * 0.0025f) * 343.0f;
-        AirAbsorption.ApplyAbsorption(ref pE0, ref pE1, ref pE2, ref pE3, ref pE4, ref pE5, binDistance);
-    
-        earlyEnergies[i] = new AcousticData 
-        { 
-            energy0 = pE0, energy1 = pE1, energy2 = pE2, 
-            energy3 = pE3, energy4 = pE4, energy5 = pE5 
-        };
-    }
-    var (estimatedRT60, estimatedDamping) = ExtractSchroederParameters(
-        sourceSlice, 
-        schroederCurve, 
-        rayNormalization, 
-        earlyBinCount
-    );
-    
-    double normalizedRT60 = math.clamp((estimatedRT60 - 0.1f) / 5.9f, 0.0f, 1.0f);
-    double mappedRoomSize = 0.0;
-    if (normalizedRT60 > 0.01)
-    {
-        mappedRoomSize = 0.3 + (normalizedRT60 * 0.98); 
-    }
-   
-    float[] bakedEarlyRIR = await RIRSynthesizer.BakeImpulseResponseAsync(earlyEnergies, cachedCoefficients);
+        var audioManager = FindFirstObjectByType<AudioManager>();
+        if (!audioManager) return;
 
-    if (nativeConvolver != null)
-    {
-        lock (dspLock) 
+        isBakingIR = true;
+
+        float distance = Vector3.Distance(transform.position, audioManager.listener.transform.position);
+        float distanceGain = 1.0f / math.max(distance, 1.0f);
+
+        directGain = distanceGain * directData.transmissionMultiplier * profile.acousticWeight;
+        audioSource.volume = math.clamp(this.directGain, 0f, 1f);
+
+        float radialVelocity = (distance - previousDistance) / Time.deltaTime;
+        previousDistance = distance;
+
+        float pitchShift = 343.0f / (343.0f + (radialVelocity * 0.5f));
+        audioSource.pitch = math.clamp(pitchShift, 0.5f, 2.0f);
+
+        int totalBins = sourceSlice.Length;
+        int dynamicEarlyBins = CalculateDynamicMixingTime(sourceSlice);
+        int earlyBinCount = math.min(dynamicEarlyBins, totalBins);
+
+        AcousticData[] earlyEnergies = new AcousticData[earlyBinCount];
+        float rayNormalization = 1.0f / audioManager.initialRays;
+
+        int firstBin = -1;
+        for (int i = 0; i < earlyBinCount; i++)
         {
-            nativeConvolver.LoadEarlyImpulseResponse(bakedEarlyRIR);
-            nativeConvolver.SetLateParams(mappedRoomSize, estimatedDamping);
-            hasBakedRIR = true;
+            if (sourceSlice[i].energy0 == 0 && sourceSlice[i].energy1 == 0 && sourceSlice[i].energy2 == 0) continue;
+            if (firstBin == -1)
+            {
+                firstBin = i;
+            }
+
+            int shiftedIndex = i - firstBin;
+
+            if (shiftedIndex <= 2) continue;
+
+            float pE0 = sourceSlice[i].energy0 * rayNormalization;
+            float pE1 = sourceSlice[i].energy1 * rayNormalization;
+            float pE2 = sourceSlice[i].energy2 * rayNormalization;
+            float pE3 = sourceSlice[i].energy3 * rayNormalization;
+            float pE4 = sourceSlice[i].energy4 * rayNormalization;
+            float pE5 = sourceSlice[i].energy5 * rayNormalization;
+
+            float binDistance = (i * 0.0025f) * 343.0f;
+            AirAbsorption.ApplyAbsorption(ref pE0, ref pE1, ref pE2, ref pE3, ref pE4, ref pE5, binDistance);
+
+            earlyEnergies[shiftedIndex] = new AcousticData
+            {
+                energy0 = pE0, energy1 = pE1, energy2 = pE2,
+                energy3 = pE3, energy4 = pE4, energy5 = pE5
+            };
+        }
+
+        var (estimatedRT60, estimatedDamping) = ExtractSchroederParameters(
+            sourceSlice,
+            schroederCurve,
+            rayNormalization,
+            earlyBinCount
+        );
+
+        double normalizedRT60 = math.clamp((estimatedRT60 - 0.1f) / 6.0f, 0.0f, 1.0f);
+        double mappedRoomSize = 0.3 + (normalizedRT60 * 0.68f);
+
+        float reverbKillSwitch = 1.0f;
+        if (estimatedRT60 <= 0.15f)
+        {
+            reverbKillSwitch = 0.0f;
+        }
+
+        float[] bakedEarlyRIR = await RIRSynthesizer.BakeImpulseResponseAsync(earlyEnergies, cachedCoefficients);
+
+        float preDelayMs = (earlyBinCount - firstBin) * 2.5f;
+
+        if (nativeConvolver != null)
+        {
+            lock (dspLock)
+            {
+                nativeConvolver.LoadEarlyImpulseResponse(bakedEarlyRIR);
+                nativeConvolver.SetLateParams(mappedRoomSize, estimatedDamping, reverbKillSwitch);
+                nativeConvolver.SetPreDelay(preDelayMs);
+                hasBakedRIR = true;
+            }
+        }
+
+        isBakingIR = false;
+    }
+}
+
+private int CalculateDynamicMixingTime(MacroBin[] sourceSlice)
+{
+    int totalBins = sourceSlice.Length;
+    
+    int windowSize = 20;  // 12
+    int densityThreshold = 18; // 9
+
+    int firstHitBin = -1;
+    for (int i = 0; i < totalBins; i++)
+    {
+        if (sourceSlice[i].energy0 > 0 || sourceSlice[i].energy1 > 0)
+        {
+            firstHitBin = i;
+            break;
         }
     }
 
-    isBakingIR = false;
+    if (firstHitBin == -1) return 32; 
+
+    for (int i = firstHitBin; i < totalBins - windowSize; i++)
+    {
+        int activeBinsInWindow = 0;
+        
+        for (int j = 0; j < windowSize; j++)
+        {
+            if (sourceSlice[i + j].energy0 > 0 || sourceSlice[i + j].energy1 > 0)
+            {
+                activeBinsInWindow++;
+            }
+        }
+
+        if (activeBinsInWindow >= densityThreshold)
+        {
+            int mixingBin = i + (windowSize / 2);
+            
+            return math.clamp(mixingBin, 16, 160); 
+        }
+    }
+
+    return 32; 
 }
 
 private (float rt60, float damping) ExtractSchroederParameters(
@@ -343,7 +405,7 @@ void OnAudioFilterRead(float[] data, int channels)
 }
 public static class AirAbsorption
 {
-    // precomputed -alpha / 20 for each band up to 4k
+    // Precomputed -alpha / 20 for each band up to 4k
     private const float c_125 = -0.001f / 20f;
     private const float c_250 = -0.002f / 20f;
     private const float c_500 = -0.005f / 20f;
