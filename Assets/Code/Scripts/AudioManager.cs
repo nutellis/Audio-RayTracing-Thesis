@@ -32,6 +32,15 @@ public class AudioManager : MonoBehaviour
 
     public int initialRays = 64000;
 
+    private const int TOTAL_BOUNCES = 128;
+    private const int BOUNCES_PER_FRAME = 32;
+    private int currentBounce = 0;
+    
+    private CommandBuffer asyncCmd;
+    private ComputeBuffer currentQueue;
+    private ComputeBuffer nextQueue;
+    
+    
     ComputeBuffer pathQueueA;
     ComputeBuffer pathQueueB;
     ComputeBuffer intersectionBuffer;
@@ -39,7 +48,6 @@ public class AudioManager : MonoBehaviour
 
     ComputeBuffer indirectArgsBuffer;
     ComputeBuffer activeCountBuffer;
-    uint[] countData = new uint[1];
 
     ComputeBuffer sourcesBuffer;
     ComputeBuffer debugBuffer;
@@ -67,7 +75,6 @@ public class AudioManager : MonoBehaviour
     private int totalEchogramSize = MAX_SOURCES * MAX_BINS;
     GraphicsBuffer echogramBuffer;
     GraphicsBuffer echogramStagingBuffer;
-    MacroBin[] readbackEchogramData;
     AcousticSource[] currentFrameSources; 
 
     private bool sourcesDirty;
@@ -86,7 +93,6 @@ public class AudioManager : MonoBehaviour
 
         echogramBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured | GraphicsBuffer.Target.CopySource, totalEchogramSize, 24); 
         echogramStagingBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured | GraphicsBuffer.Target.CopyDestination, totalEchogramSize, 24);
-        readbackEchogramData = new MacroBin[totalEchogramSize];
         
         audioShader.SetBuffer(shadePathsKernel, "echogramBuffer", echogramBuffer);
         audioShader.SetBuffer(connectShadowsKernel, "echogramBuffer", echogramBuffer);
@@ -114,6 +120,14 @@ public class AudioManager : MonoBehaviour
 
         audioShader.SetBuffer(convertToFloatKernel, "echogramBuffer", echogramBuffer);
         audioShader.SetBuffer(convertToFloatKernel, "finalFloatEchogram", finalFloatBuffer);
+        
+        asyncCmd = new CommandBuffer();
+        asyncCmd.name = "AsyncAudioRayTracer";
+        asyncCmd.SetExecutionFlags(CommandBufferExecutionFlags.AsyncCompute);
+    
+        currentQueue = pathQueueA;
+        nextQueue = pathQueueB;
+        
         
         InitializeStaticMaterials();
 
@@ -143,6 +157,7 @@ public class AudioManager : MonoBehaviour
         directAudioBuffer?.Release();
         echogramStagingBuffer?.Release();
         finalFloatBuffer?.Release();
+        asyncCmd?.Release();
     }
     
     private void LateUpdate()
@@ -158,7 +173,8 @@ public class AudioManager : MonoBehaviour
             BindBufferToKernels("tlasTree", bvhManager.GetBVHBuffer(), extendRaysKernel, connectShadowsKernel, traceDirectKernel);
         }
         
-        if (isTracing && echogramRequest.done && directDataRequest.done)
+        // 1. Check if the FULL trace is complete and data has returned from VRAM
+        if (isTracing && currentBounce >= TOTAL_BOUNCES && echogramRequest.done && directDataRequest.done)
         {
             isTracing = false;
             if (!echogramRequest.hasError && !directDataRequest.hasError)
@@ -170,71 +186,105 @@ public class AudioManager : MonoBehaviour
             }
         }
 
-        if (registeredAudioSources.Count > 0 && isTracing == false)
+        // 2. Start a new trace if idle
+        if (registeredAudioSources.Count > 0 && !isTracing)
         {
             isTracing = true;
+            currentBounce = 0;
+            currentQueue = pathQueueA;
+            nextQueue = pathQueueB;
             SetupSourceBuffer();
-            
-            int clearThreads = Mathf.CeilToInt(totalEchogramSize / 64f);
-            audioShader.Dispatch(echogramResetKernel, clearThreads, 1, 1);
-
-            ExecuteWavefrontTracer();
-
-            int directGroups = Mathf.Max(1, Mathf.CeilToInt(currentFrameSources.Length / 64f));
-            audioShader.Dispatch(traceDirectKernel, directGroups, 1, 1);
-            
-            int convertGroups = Mathf.CeilToInt(totalEchogramSize / 64f);
-            audioShader.Dispatch(convertToFloatKernel, convertGroups, 1, 1);
-            
-            echogramRequest = AsyncGPUReadback.Request(finalFloatBuffer);
-            directDataRequest = AsyncGPUReadback.Request(directAudioBuffer);
         }
+
+        // 3. Process the next temporal slice of the wavefront
+        if (isTracing && currentBounce < TOTAL_BOUNCES)
+        {
+            asyncCmd.Clear();
+            asyncCmd.SetExecutionFlags(CommandBufferExecutionFlags.AsyncCompute);
+
+            // If it's the very first slice, initialize rays and clear the echogram
+            if (currentBounce == 0)
+            {
+                int clearThreads = Mathf.CeilToInt(totalEchogramSize / 64f);
+                asyncCmd.DispatchCompute(audioShader, echogramResetKernel, clearThreads, 1, 1);
+
+                asyncCmd.SetBufferCounterValue(pathQueueA, 0);
+                asyncCmd.SetComputeBufferParam(audioShader, initRaysKernel, "pathQueueOut", pathQueueA);
+                asyncCmd.DispatchCompute(audioShader, initRaysKernel, Mathf.CeilToInt(initialRays / 64f), 1, 1);
+            }
+
+            // Build the commands for this frame's batch of bounces
+            int endBounce = Mathf.Min(currentBounce + BOUNCES_PER_FRAME, TOTAL_BOUNCES);
+            BuildWavefrontSlice(endBounce);
+
+            // If this is the LAST slice, finish the data conversion
+            if (endBounce >= TOTAL_BOUNCES)
+            {
+                int directGroups = Mathf.Max(1, Mathf.CeilToInt(currentFrameSources.Length / 64f));
+                asyncCmd.DispatchCompute(audioShader, traceDirectKernel, directGroups, 1, 1);
+                
+                int convertGroups = Mathf.CeilToInt(totalEchogramSize / 64f);
+                asyncCmd.DispatchCompute(audioShader, convertToFloatKernel, convertGroups, 1, 1);
+            }
+
+            // Push the command buffer to the GPU's asynchronous compute queue
+            Graphics.ExecuteCommandBufferAsync(asyncCmd, ComputeQueueType.Background);
+            
+            currentBounce = endBounce;
+
+            // Only request readback if all bounces are officially dispatched
+            if (currentBounce >= TOTAL_BOUNCES)
+            {
+                echogramRequest = AsyncGPUReadback.Request(finalFloatBuffer);
+                directDataRequest = AsyncGPUReadback.Request(directAudioBuffer);
+            }
+        }
+
         CleanSounds();
     }
     
-    void ExecuteWavefrontTracer()
-{
-    pathQueueA.SetCounterValue(0);
-    audioShader.SetBuffer(initRaysKernel, "pathQueueOut", pathQueueA);
-    audioShader.Dispatch(initRaysKernel, Mathf.CeilToInt(initialRays / 64f), 1, 1);
-
-    ComputeBuffer currentQueue = pathQueueA;
-    ComputeBuffer nextQueue = pathQueueB;
-
-    for (int bounce = 0; bounce < 128; bounce++)
+    void BuildWavefrontSlice(int targetBounce)
     {
-        ComputeBuffer.CopyCount(currentQueue, activeCountBuffer, 0);
-        audioShader.SetBuffer(prepareArgsKernel, "activeCount", activeCountBuffer);
-        audioShader.SetBuffer(prepareArgsKernel, "indirectArgs", indirectArgsBuffer);
-        audioShader.Dispatch(prepareArgsKernel, 1, 1, 1);
+        for (int bounce = currentBounce; bounce < targetBounce; bounce++)
+        {
+            // --- PREPARE EXTEND ARGS ---
+            asyncCmd.CopyCounterValue(currentQueue, activeCountBuffer, 0);
+            asyncCmd.SetComputeBufferParam(audioShader, prepareArgsKernel, "activeCount", activeCountBuffer);
+            asyncCmd.SetComputeBufferParam(audioShader, prepareArgsKernel, "indirectArgs", indirectArgsBuffer);
+            asyncCmd.DispatchCompute(audioShader, prepareArgsKernel, 1, 1, 1);
 
-        audioShader.SetBuffer(extendRaysKernel, "activeCount", activeCountBuffer);
-        audioShader.SetBuffer(extendRaysKernel, "pathQueueIn", currentQueue);
-        audioShader.SetBuffer(extendRaysKernel, "intersectionBuffer", intersectionBuffer);
-        audioShader.DispatchIndirect(extendRaysKernel, indirectArgsBuffer);
+            // --- EXTEND ---
+            asyncCmd.SetComputeBufferParam(audioShader, extendRaysKernel, "activeCount", activeCountBuffer);
+            asyncCmd.SetComputeBufferParam(audioShader, extendRaysKernel, "pathQueueIn", currentQueue);
+            asyncCmd.SetComputeBufferParam(audioShader, extendRaysKernel, "intersectionBuffer", intersectionBuffer);
+            asyncCmd.DispatchCompute(audioShader, extendRaysKernel, indirectArgsBuffer, 0);
 
-        nextQueue.SetCounterValue(0);
-        shadowQueue.SetCounterValue(0);
+            asyncCmd.SetBufferCounterValue(nextQueue, 0);
+            asyncCmd.SetBufferCounterValue(shadowQueue, 0);
 
-        audioShader.SetBuffer(shadePathsKernel, "activeCount", activeCountBuffer);
-        audioShader.SetBuffer(shadePathsKernel, "pathQueueIn", currentQueue);
-        audioShader.SetBuffer(shadePathsKernel, "intersectionBuffer", intersectionBuffer);
-        audioShader.SetBuffer(shadePathsKernel, "pathQueueOut", nextQueue);
-        audioShader.SetBuffer(shadePathsKernel, "shadowQueueOut", shadowQueue);
-        audioShader.DispatchIndirect(shadePathsKernel, indirectArgsBuffer);
+            // --- SHADE ---
+            asyncCmd.SetComputeBufferParam(audioShader, shadePathsKernel, "activeCount", activeCountBuffer);
+            asyncCmd.SetComputeBufferParam(audioShader, shadePathsKernel, "pathQueueIn", currentQueue);
+            asyncCmd.SetComputeBufferParam(audioShader, shadePathsKernel, "intersectionBuffer", intersectionBuffer);
+            asyncCmd.SetComputeBufferParam(audioShader, shadePathsKernel, "pathQueueOut", nextQueue);
+            asyncCmd.SetComputeBufferParam(audioShader, shadePathsKernel, "shadowQueueOut", shadowQueue);
+            asyncCmd.DispatchCompute(audioShader, shadePathsKernel, indirectArgsBuffer, 0);
 
-        ComputeBuffer.CopyCount(shadowQueue, activeCountBuffer, 0);
-        audioShader.SetBuffer(prepareArgsKernel, "activeCount", activeCountBuffer);
-        audioShader.SetBuffer(prepareArgsKernel, "indirectArgs", indirectArgsBuffer);
-        audioShader.Dispatch(prepareArgsKernel, 1, 1, 1);
+            // --- PREPARE SHADOW ARGS ---
+            asyncCmd.CopyCounterValue(shadowQueue, activeCountBuffer, 0);
+            asyncCmd.SetComputeBufferParam(audioShader, prepareArgsKernel, "activeCount", activeCountBuffer);
+            asyncCmd.SetComputeBufferParam(audioShader, prepareArgsKernel, "indirectArgs", indirectArgsBuffer);
+            asyncCmd.DispatchCompute(audioShader, prepareArgsKernel, 1, 1, 1);
 
-        audioShader.SetBuffer(connectShadowsKernel, "activeCount", activeCountBuffer);
-        audioShader.SetBuffer(connectShadowsKernel, "shadowQueueIn", shadowQueue);
-        audioShader.DispatchIndirect(connectShadowsKernel, indirectArgsBuffer);
+            // --- CONNECT ---
+            asyncCmd.SetComputeBufferParam(audioShader, connectShadowsKernel, "activeCount", activeCountBuffer);
+            asyncCmd.SetComputeBufferParam(audioShader, connectShadowsKernel, "shadowQueueIn", shadowQueue);
+            asyncCmd.DispatchCompute(audioShader, connectShadowsKernel, indirectArgsBuffer, 0);
 
-        (currentQueue, nextQueue) = (nextQueue, currentQueue);
+            // Swap queues for the next iteration
+            (currentQueue, nextQueue) = (nextQueue, currentQueue);
+        }
     }
-}
 
     void SetupComputeBuffers(int initialRays)
     {
