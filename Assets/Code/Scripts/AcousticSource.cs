@@ -29,7 +29,7 @@ public class AcousticSource : MonoBehaviour
 
     private FilterCoefficients[] cachedCoefficients;
 
-    private NativeConvolver nativeConvolver;
+    private AudioEngine nativeConvolver;
     private float[] monoInputBuffer;
     private float[] monoWetBuffer;
     private bool hasBakedRIR = false;
@@ -76,7 +76,7 @@ public class AcousticSource : MonoBehaviour
         var collider = gameObject.GetComponent<SphereCollider>();
         radius = collider ? collider.radius : 1f;
 
-        nativeConvolver = new NativeConvolver();
+        nativeConvolver = new AudioEngine();
         hasBakedRIR = false;
         isBakingIR = false;
     }
@@ -206,7 +206,7 @@ public async void UpdateFrameData(MacroBin[] sourceSlice, DirectAudioData direct
             reverbKillSwitch = 0.0f;
         }
 
-        float[] bakedEarlyRIR = await RIRSynthesizer.BakeImpulseResponseAsync(earlyEnergies, cachedCoefficients);
+        float[] bakedEarlyRIR = AudioEngine.BakeImpulseResponse(earlyEnergies, cachedCoefficients);
 
         float preDelayMs = (earlyBinCount - firstBin) * 2.5f;
 
