@@ -21,12 +21,12 @@ namespace Code.Data
     [StructLayout(LayoutKind.Sequential)]
     public struct MacroBin
     {
-        public float energy0;
-        public float energy1;
-        public float energy2;
-        public float energy3;
-        public float energy4;
-        public float energy5;
+        public uint energy0;
+        public uint energy1;
+        public uint energy2;
+        public uint energy3;
+        public uint energy4;
+        public uint energy5;
     }
     
     public struct DirectAudioData 
