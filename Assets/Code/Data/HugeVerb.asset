@@ -10,17 +10,17 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 8987618ba87d85749b33d3e242c0432a, type: 3}
-  m_Name: BrickWork
+  m_Name: HugeVerb
   m_EditorClassIdentifier: Assembly-CSharp::AcousticMaterial
   materialID: 4
   absorptionCoefficients:
-  - 0.15
-  - 0.15
-  - 0.15
-  - 0.15
-  - 0.15
-  - 0.15
-  scattering: 0.3
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  scattering: 0.2
   transmissionCoefficients:
   - 0
   - 0

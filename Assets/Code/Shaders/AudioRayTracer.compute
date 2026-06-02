@@ -2,7 +2,6 @@
 #pragma kernel InitRays
 #pragma kernel TraceRays
 #pragma kernel TraceDirectSound
-#pragma kernel ResetEchogram
 #pragma kernel ConvertToFloat
 
 
@@ -15,6 +14,7 @@
 #define INVERSE_ENERGY_SCALE (1.0f / 65536.0f)
 
 float deltaTime;
+int rayOffset;
 
 cbuffer GenericBuffer
 {
@@ -29,15 +29,6 @@ cbuffer GenericBuffer
     
     float padding;
 };
-
-struct DebugInfo
-{
-    float3 origin;
-    float3 direction;
-    
-    float2 padding;
-};
-//RWStructuredBuffer<DebugInfo> debugInfo;
 
 // Ray relevant structures
 struct Ray
@@ -152,7 +143,6 @@ RWStructuredBuffer<DirectAudioData> directAudioOutput;
 
 struct MacroBin
 {
-    // We use uint because HLSL InterlockedAdd does not support floats
     uint energy0; 
     uint energy1;
     uint energy2;
@@ -160,7 +150,7 @@ struct MacroBin
     uint energy4;
     uint energy5;
 };
-// E.g., 800 bins (2 seconds of audio at 2.5ms per bin) per source
+
 RWStructuredBuffer<MacroBin> echogramBuffer;
 
 struct FloatMacroBin {
@@ -506,20 +496,19 @@ void Transmit(float3 origin, float3 direction, float maxDistance, int sourceId, 
                         float dist = IntersectTriangle(localOrigin, localDirection, tri);
                         float worldDist = dist / worldToLocalScale;
                         
-                        if (worldDist > 0.001 && worldDist < maxDistance)
-                        {
-                            MaterialData mat = materials[instance.materialId];
-                            float maxSurv = 0.0;
-                            
-                                survived.x *= mat.transmission.x;
-                                survived.y *= mat.transmission.y;
-                                survived.z *= mat.transmission.z;
-
-                            maxSurv = max(maxSurv, max(survived[0], max(survived[1], survived[2])));
-                            
-                            if (maxSurv < 0.01) return; 
-                        } 
-                        /*
+                        // if (worldDist > 0.001 && worldDist < maxDistance)
+                        // {
+                        //     MaterialData mat = materials[instance.materialId];
+                        //     float maxSurv = 0.0;
+                        //     
+                        //         survived.x *= mat.transmission.x;
+                        //         survived.y *= mat.transmission.y;
+                        //         survived.z *= mat.transmission.z;
+                        //
+                        //     maxSurv = max(maxSurv, max(survived[0], max(survived[1], survived[2])));
+                        //     
+                        //     if (maxSurv < 0.01) return; 
+                        // } 
                         if (worldDist > 0.005f && worldDist < maxDistance) {
                             MaterialData mat = materials[instance.materialId];
                             
@@ -535,7 +524,6 @@ void Transmit(float3 origin, float3 direction, float maxDistance, int sourceId, 
                             survived.y *= (mat.transmission.y / survivalProb);
                             survived.z *= (mat.transmission.z / survivalProb);
                         }
-                        */
                     }
                 }
                 else
@@ -559,12 +547,19 @@ void Transmit(float3 origin, float3 direction, float maxDistance, int sourceId, 
 [numthreads(64,1,1)]
 void TraceRays(uint3 id : SV_DispatchThreadID)
 {
-    if (id.x >= (uint) initialRays)
-    {
-        return;
-    }
+    // if (id.x >= (uint) initialRays)
+    // {
+    //     return;
+    // }
+    uint globalRayIndex = id.x + rayOffset;
+    if (globalRayIndex >= (uint)initialRays) return;
+    
+    // float3 currentPos = listenerPosition.xyz;
+    // float3 currentDir = SphericalDistribution(id.x);
+    // float3 firstDir = currentDir;
+    // float totalDistance = 0;
 
-    Ray r = rayBuffer[id.x];
+    Ray r = rayBuffer[globalRayIndex];
 
     float3 currentPos = r.origin;
     float3 currentDir = r.direction;
@@ -577,7 +572,7 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
     arrivalAngles.x = dot(firstDir, listenerRight.xyz); // Lateral
     arrivalAngles.y = dot(firstDir, float3(0, 1, 0));    // Elevation
     
-    for (int bounce = 0; bounce < 256; bounce++)
+    for (int bounce = 0; bounce < 32; bounce++)
     {
         float closestSourceDist = INF;
         int hitSourceIndex = -1;
@@ -633,59 +628,55 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         float3 hitPoint = currentPos + currentDir * hit.distance;
         
         //if the material allows for diffuse scattering we use NEE https://www.cg.tuwien.ac.at/sites/default/files/course/4854/attachments/12_3_next%20event%20estimation_notes.pdf
-        if (mat.scattering > 0.1 && sourceCount > 0) {
-    /*
-            uint seed = id.x + frameCount * 719393;
-                uint randomSourceIdx = (uint)(Random(seed) * sourceCount);
-                randomSourceIdx = clamp(randomSourceIdx, 0, (uint)sourceCount - 1);
-     */
-            // next event estimation (not exactly but almost) 
-            for (int i = 0; i < sourceCount; i++)
+        if (mat.scattering >= 0.01 && sourceCount > 0) {
+            
+            uint seed = globalRayIndex + frameCount * 719393;
+            uint randomSourceIdx = (uint)(Random(seed) * sourceCount);
+            randomSourceIdx = clamp(randomSourceIdx, 0, (uint)sourceCount - 1);
+
+            
+            SourceData source = sources[randomSourceIdx];
+            float3 toSource = source.origin - hitPoint;
+            float distToSource = length(toSource);
+            float3 dirToSource = toSource / distToSource;
+
+            float3 shadowOrigin = hitPoint + hit.surfaceNormal * 0.001;
+            float3 transmitted = float3(1.0, 1.0, 1.0);
+
+            
+            Transmit(shadowOrigin, dirToSource, distToSource, source.sourceId, transmitted);
+            
+            float maxSurvived = max(transmitted[0], max(transmitted[1], transmitted[2]));
+            if (maxSurvived > 0.01)
             {
-                SourceData source = sources[i];
-                float3 toSource = source.origin - hitPoint;
-                float distToSource = length(toSource);
-                float3 dirToSource = toSource / distToSource;
-    
-                float3 shadowOrigin = hitPoint + hit.surfaceNormal * 0.001;
-                float3 transmitted = float3(1.0, 1.0, 1.0);
-    
-                
-                Transmit(shadowOrigin, dirToSource, distToSource, source.sourceId, transmitted);
-                
-                float maxSurvived = max(transmitted[0], max(transmitted[1], transmitted[2]));
-                if (maxSurvived > 0.01)
+                float pathDist = totalDistance + distToSource;
+                float pathTime = pathDist / 343.0f;
+                uint binIndex = (uint)(pathTime / 0.0025f);
+
+                if (binIndex < MAX_BINS)
                 {
-                    float pathDist = totalDistance + distToSource;
-                    float pathTime = pathDist / 343.0f;
-                    uint binIndex = (uint)(pathTime / 0.0025f);
+                    uint flatIndex = (randomSourceIdx * MAX_BINS) + binIndex;
 
-                    if (binIndex < MAX_BINS)
-                    {
-                        uint flatIndex = (i * MAX_BINS) + binIndex;
-    
-                        float solidAngle = (PI * source.radius * source.radius) / max(0.001f, distToSource * distToSource);
-    
-                        float cosTheta = max(0.0f, dot(hit.surfaceNormal, dirToSource));                        
-                        float brdf = cosTheta / PI;
-    
-                        float gain = source.power * solidAngle * brdf;
-                        float baseCalc = mat.scattering * gain;
-    
-                        float3 transLowMid  = float3(transmitted.x, transmitted.x, transmitted.y);
-                        float3 transMidHigh = float3(transmitted.y, transmitted.z, transmitted.z);
+                    float solidAngle = min(2.0 * PI, (PI * source.radius * source.radius) / max(0.001f, distToSource * distToSource));
+                    
+                    float cosTheta = max(0.0f, dot(hit.surfaceNormal, dirToSource));                        
+                    float brdf = cosTheta / PI;
 
-                        float3 eLowMid  = energyLowMid  * (1.0 - mat.absorptionLowMid)  * baseCalc * transLowMid;
-                        float3 eMidHigh = energyMidHigh * (1.0 - mat.absorptionMidHigh) * baseCalc * transMidHigh;
-                        
-                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eLowMid.x * ENERGY_SCALE));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eLowMid.y * ENERGY_SCALE));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eLowMid.z * ENERGY_SCALE));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eMidHigh.x * ENERGY_SCALE));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eMidHigh.y * ENERGY_SCALE));
-                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eMidHigh.z * ENERGY_SCALE));
- 
-                    }
+                    float gain = source.power * solidAngle * brdf;
+                    float baseCalc = mat.scattering * gain;
+
+                    float3 transLowMid  = float3(transmitted.x, transmitted.x, transmitted.y);
+                    float3 transMidHigh = float3(transmitted.y, transmitted.z, transmitted.z);
+
+                    float3 eLowMid  = energyLowMid  * (1.0 - mat.absorptionLowMid)  * baseCalc * transLowMid;
+                    float3 eMidHigh = energyMidHigh * (1.0 - mat.absorptionMidHigh) * baseCalc * transMidHigh;
+                    
+                    InterlockedAdd(echogramBuffer[flatIndex].energy0, (eLowMid.x * ENERGY_SCALE));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy1, (eLowMid.y * ENERGY_SCALE));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy2, (eLowMid.z * ENERGY_SCALE));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy3, (eMidHigh.x * ENERGY_SCALE));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy4, (eMidHigh.y * ENERGY_SCALE));
+                    InterlockedAdd(echogramBuffer[flatIndex].energy5, (eMidHigh.z * ENERGY_SCALE));
                 }
             }
         }
@@ -699,7 +690,7 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         // REFLECT 
         currentPos = (currentPos + currentDir * hit.distance) + (hit.surfaceNormal * 0.001);
        
-        uint seed = id.x + bounce * 719393 + frameCount;
+        uint seed = globalRayIndex + bounce * 719393 + frameCount;
         float random_val = Random(seed);
         
         float is_scattered = step(random_val, mat.scattering);
@@ -745,18 +736,6 @@ void TraceDirectSound(uint3 id : SV_DispatchThreadID)
     directAudioOutput[sourceIndex].delayMs = (dist / 343.0) * 1000.0;
 }
 
-
-[numthreads(64,1,1)]
-void ResetEchogram(uint3 id : SV_DispatchThreadID) {
-    if (id.x >= (uint)sourceCount * MAX_BINS) return; 
-    echogramBuffer[id.x].energy0 = 0;
-    echogramBuffer[id.x].energy1 = 0;
-    echogramBuffer[id.x].energy2 = 0;
-    echogramBuffer[id.x].energy3 = 0;
-    echogramBuffer[id.x].energy4 = 0;
-    echogramBuffer[id.x].energy5 = 0;
-}
-
 [numthreads(64, 1, 1)]
 void ConvertToFloat(uint3 id : SV_DispatchThreadID) {
     if (id.x >= (uint)(sourceCount * MAX_BINS)) return;
@@ -767,4 +746,11 @@ void ConvertToFloat(uint3 id : SV_DispatchThreadID) {
     finalFloatEchogram[id.x].energy3 = (float)echogramBuffer[id.x].energy3 * INVERSE_ENERGY_SCALE;
     finalFloatEchogram[id.x].energy4 = (float)echogramBuffer[id.x].energy4 * INVERSE_ENERGY_SCALE;
     finalFloatEchogram[id.x].energy5 = (float)echogramBuffer[id.x].energy5 * INVERSE_ENERGY_SCALE;
+
+    echogramBuffer[id.x].energy0 = 0;
+    echogramBuffer[id.x].energy1 = 0;
+    echogramBuffer[id.x].energy2 = 0;
+    echogramBuffer[id.x].energy3 = 0;
+    echogramBuffer[id.x].energy4 = 0;
+    echogramBuffer[id.x].energy5 = 0;
 }

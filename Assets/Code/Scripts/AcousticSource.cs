@@ -1,6 +1,7 @@
 
 using System;
 using Code.Data;
+using Unity.Collections;
 using Unity.Mathematics;
 using Unity.Profiling;
 using UnityEngine;
@@ -132,7 +133,7 @@ public class AcousticSource : MonoBehaviour
     
     static readonly ProfilerMarker processFrameMarker = new("AcousticSource.UpdateFrame");
 
-public void UpdateFrameData(AcousticData[] sourceSlice, DirectAudioData directData)
+public void UpdateFrameData(NativeSlice<AcousticData> sourceSlice, DirectAudioData directData)
 {
     using (processFrameMarker.Auto())
     {
@@ -184,7 +185,7 @@ public void UpdateFrameData(AcousticData[] sourceSlice, DirectAudioData directDa
 
             float binDistance = (i * 0.0025f) * 343.0f;
             AirAbsorption.ApplyAbsorption(ref pE0, ref pE1, ref pE2, ref pE3, ref pE4, ref pE5, binDistance);
-
+            
             earlyEnergies[shiftedIndex] = new AcousticData
             {
                 energy0 = pE0, energy1 = pE1, energy2 = pE2,
@@ -228,7 +229,7 @@ public void UpdateFrameData(AcousticData[] sourceSlice, DirectAudioData directDa
     }
 }
 
-private int CalculateDynamicMixingTime(AcousticData[] sourceSlice)
+private int CalculateDynamicMixingTime(NativeSlice<AcousticData> sourceSlice)
 {
     int totalBins = sourceSlice.Length;
     
@@ -271,7 +272,7 @@ private int CalculateDynamicMixingTime(AcousticData[] sourceSlice)
 }
 
 private (float rt60, float damping) ExtractSchroederParameters(
-    AcousticData[] sourceSlice, 
+    NativeSlice<AcousticData> sourceSlice, 
     float[] schroederCurve, 
     float rayNormalization, 
     int earlyBinCount)
