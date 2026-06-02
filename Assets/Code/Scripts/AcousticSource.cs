@@ -26,6 +26,7 @@ public class AcousticSource : MonoBehaviour
     [HideInInspector] public float maxAudibleDistance;
     [HideInInspector] public float minAudibleDistance;
     [HideInInspector] public float directGain = 0;
+    [HideInInspector] public float dynamicTailLength { get; private set; } = 0f;
 
     private FilterCoefficients[] cachedCoefficients;
 
@@ -34,6 +35,7 @@ public class AcousticSource : MonoBehaviour
     private float[] monoWetBuffer;
     private bool hasBakedRIR = false;
     private bool isBakingIR = false;
+    public volatile bool isTailPhase = false;
     
     private float[] schroederCurve = new float[1600];
     private float previousDistance = 0f;
@@ -130,7 +132,7 @@ public class AcousticSource : MonoBehaviour
     
     static readonly ProfilerMarker processFrameMarker = new("AcousticSource.UpdateFrame");
 
-public async void UpdateFrameData(MacroBin[] sourceSlice, DirectAudioData directData)
+public void UpdateFrameData(AcousticData[] sourceSlice, DirectAudioData directData)
 {
     using (processFrameMarker.Auto())
     {
@@ -197,7 +199,7 @@ public async void UpdateFrameData(MacroBin[] sourceSlice, DirectAudioData direct
             earlyBinCount
         );
 
-        double normalizedRT60 = math.clamp((estimatedRT60 - 0.1f) / 6.0f, 0.0f, 1.0f);
+        double normalizedRT60 = math.clamp((estimatedRT60 - 0.1f) / 7.0f, 0.0f, 1.0f);
         double mappedRoomSize = 0.3 + (normalizedRT60 * 0.68f);
 
         float reverbKillSwitch = 1.0f;
@@ -205,13 +207,14 @@ public async void UpdateFrameData(MacroBin[] sourceSlice, DirectAudioData direct
         {
             reverbKillSwitch = 0.0f;
         }
-
-        float[] bakedEarlyRIR = AudioEngine.BakeImpulseResponse(earlyEnergies, cachedCoefficients);
-
-        float preDelayMs = (earlyBinCount - firstBin) * 2.5f;
-
+        
+        dynamicTailLength = estimatedRT60;
+        
         if (nativeConvolver != null)
         {
+            float[] bakedEarlyRIR = AudioEngine.BakeImpulseResponse(earlyEnergies, cachedCoefficients);
+            float preDelayMs = (earlyBinCount - firstBin) * 2.5f;
+            
             lock (dspLock)
             {
                 nativeConvolver.LoadEarlyImpulseResponse(bakedEarlyRIR);
@@ -225,7 +228,7 @@ public async void UpdateFrameData(MacroBin[] sourceSlice, DirectAudioData direct
     }
 }
 
-private int CalculateDynamicMixingTime(MacroBin[] sourceSlice)
+private int CalculateDynamicMixingTime(AcousticData[] sourceSlice)
 {
     int totalBins = sourceSlice.Length;
     
@@ -268,7 +271,7 @@ private int CalculateDynamicMixingTime(MacroBin[] sourceSlice)
 }
 
 private (float rt60, float damping) ExtractSchroederParameters(
-    MacroBin[] sourceSlice, 
+    AcousticData[] sourceSlice, 
     float[] schroederCurve, 
     float rayNormalization, 
     int earlyBinCount)
@@ -360,6 +363,11 @@ private (float rt60, float damping) ExtractSchroederParameters(
     
 void OnAudioFilterRead(float[] data, int channels)
 {
+    if (isTailPhase)
+    {
+        Array.Clear(data, 0, data.Length);
+    }
+    
     int frameCount = data.Length / channels;
 
     if (monoInputBuffer == null || monoInputBuffer.Length != frameCount)

@@ -3,25 +3,16 @@
 #pragma kernel TraceRays
 #pragma kernel TraceDirectSound
 #pragma kernel ResetEchogram
+#pragma kernel ConvertToFloat
+
 
 #define INF 1e30
 #define PI 3.14159265359
 
 #define MAX_BINS 1600 // 1600 bins * 2.5ms = 2.0 seconds of audio tracking
 
-#define ATOMIC_ADD_FLOAT(dest, val) \
-{ \
-uint compare, original = dest; \
-[allow_uav_condition] \
-while (true) \
-{ \
-compare = original; \
-uint newVal = asuint(asfloat(compare) + (val)); \
-InterlockedCompareExchange(dest, compare, newVal, original); \
-if (original == compare) break; \
-} \
-}
-
+#define ENERGY_SCALE 65536.0f
+#define INVERSE_ENERGY_SCALE (1.0f / 65536.0f)
 
 float deltaTime;
 
@@ -169,9 +160,14 @@ struct MacroBin
     uint energy4;
     uint energy5;
 };
-
 // E.g., 800 bins (2 seconds of audio at 2.5ms per bin) per source
 RWStructuredBuffer<MacroBin> echogramBuffer;
+
+struct FloatMacroBin {
+    float energy0; float energy1; float energy2;
+    float energy3; float energy4; float energy5;
+};
+RWStructuredBuffer<FloatMacroBin> finalFloatEchogram;
 
 
 struct MaterialData
@@ -522,7 +518,24 @@ void Transmit(float3 origin, float3 direction, float maxDistance, int sourceId, 
                             maxSurv = max(maxSurv, max(survived[0], max(survived[1], survived[2])));
                             
                             if (maxSurv < 0.01) return; 
+                        } 
+                        /*
+                        if (worldDist > 0.005f && worldDist < maxDistance) {
+                            MaterialData mat = materials[instance.materialId];
+                            
+                            float survivalProb = (mat.transmission.x + mat.transmission.y + mat.transmission.z) / 3.0f;
+                            
+                            uint seed = PcgHash(asuint(origin.x) ^ asuint(direction.y) ^ i ^ frameCount);
+                            if (Random(seed) > survivalProb) {
+                                survived = float3(0, 0, 0);
+                                return; // ray is blocked. bye
+                            }
+                            
+                            survived.x *= (mat.transmission.x / survivalProb);
+                            survived.y *= (mat.transmission.y / survivalProb);
+                            survived.z *= (mat.transmission.z / survivalProb);
                         }
+                        */
                     }
                 }
                 else
@@ -598,12 +611,12 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
             {
                 uint flatIndex = hitSourceIndex * MAX_BINS + binIndex;
 
-                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy0, energyLowMid.x * gain);
-                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy1, energyLowMid.y * gain);
-                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy2, energyLowMid.z * gain);
-                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy3, energyMidHigh.x * gain);
-                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy4, energyMidHigh.y * gain);
-                ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy5, energyMidHigh.z * gain);
+                InterlockedAdd(echogramBuffer[flatIndex].energy0, (energyLowMid.x * gain * ENERGY_SCALE));
+                InterlockedAdd(echogramBuffer[flatIndex].energy1, (energyLowMid.y * gain * ENERGY_SCALE));
+                InterlockedAdd(echogramBuffer[flatIndex].energy2, (energyLowMid.z * gain * ENERGY_SCALE));
+                InterlockedAdd(echogramBuffer[flatIndex].energy3, (energyMidHigh.x * gain * ENERGY_SCALE));
+                InterlockedAdd(echogramBuffer[flatIndex].energy4, (energyMidHigh.y * gain * ENERGY_SCALE));
+                InterlockedAdd(echogramBuffer[flatIndex].energy5, (energyMidHigh.z * gain * ENERGY_SCALE));
             }
         }
         
@@ -620,8 +633,12 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
         float3 hitPoint = currentPos + currentDir * hit.distance;
         
         //if the material allows for diffuse scattering we use NEE https://www.cg.tuwien.ac.at/sites/default/files/course/4854/attachments/12_3_next%20event%20estimation_notes.pdf
-        if (mat.scattering >= 0.01) {
-    
+        if (mat.scattering > 0.1 && sourceCount > 0) {
+    /*
+            uint seed = id.x + frameCount * 719393;
+                uint randomSourceIdx = (uint)(Random(seed) * sourceCount);
+                randomSourceIdx = clamp(randomSourceIdx, 0, (uint)sourceCount - 1);
+     */
             // next event estimation (not exactly but almost) 
             for (int i = 0; i < sourceCount; i++)
             {
@@ -661,13 +678,13 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
                         float3 eLowMid  = energyLowMid  * (1.0 - mat.absorptionLowMid)  * baseCalc * transLowMid;
                         float3 eMidHigh = energyMidHigh * (1.0 - mat.absorptionMidHigh) * baseCalc * transMidHigh;
                         
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy0, eLowMid.x);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy1, eLowMid.y);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy2, eLowMid.z);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy3, eMidHigh.x);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy4, eMidHigh.y);
-                        ATOMIC_ADD_FLOAT(echogramBuffer[flatIndex].energy5, eMidHigh.z);
-                        
+                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eLowMid.x * ENERGY_SCALE));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eLowMid.y * ENERGY_SCALE));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eLowMid.z * ENERGY_SCALE));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eMidHigh.x * ENERGY_SCALE));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eMidHigh.y * ENERGY_SCALE));
+                        InterlockedAdd(echogramBuffer[flatIndex].energy0, (eMidHigh.z * ENERGY_SCALE));
+ 
                     }
                 }
             }
@@ -704,7 +721,7 @@ void TraceDirectSound(uint3 id : SV_DispatchThreadID)
 {
     uint sourceIndex = id.x;
     
-    if (sourceIndex >= sourceCount) return;
+    if (sourceIndex >= (uint)sourceCount) return;
 
     SourceData source = sources[sourceIndex];
     float3 toSource = source.origin - listenerPosition.xyz;
@@ -730,15 +747,24 @@ void TraceDirectSound(uint3 id : SV_DispatchThreadID)
 
 
 [numthreads(64,1,1)]
-void ResetEchogram(uint3 id : SV_DispatchThreadID)
-{
-    // totalEchogramSize = 64 * 1600 = 102400
-    if (id.x >= 102400) return; 
-
+void ResetEchogram(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= (uint)sourceCount * MAX_BINS) return; 
     echogramBuffer[id.x].energy0 = 0;
     echogramBuffer[id.x].energy1 = 0;
     echogramBuffer[id.x].energy2 = 0;
     echogramBuffer[id.x].energy3 = 0;
     echogramBuffer[id.x].energy4 = 0;
     echogramBuffer[id.x].energy5 = 0;
+}
+
+[numthreads(64, 1, 1)]
+void ConvertToFloat(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= (uint)(sourceCount * MAX_BINS)) return;
+    
+    finalFloatEchogram[id.x].energy0 = (float)echogramBuffer[id.x].energy0 * INVERSE_ENERGY_SCALE;
+    finalFloatEchogram[id.x].energy1 = (float)echogramBuffer[id.x].energy1 * INVERSE_ENERGY_SCALE;
+    finalFloatEchogram[id.x].energy2 = (float)echogramBuffer[id.x].energy2 * INVERSE_ENERGY_SCALE;
+    finalFloatEchogram[id.x].energy3 = (float)echogramBuffer[id.x].energy3 * INVERSE_ENERGY_SCALE;
+    finalFloatEchogram[id.x].energy4 = (float)echogramBuffer[id.x].energy4 * INVERSE_ENERGY_SCALE;
+    finalFloatEchogram[id.x].energy5 = (float)echogramBuffer[id.x].energy5 * INVERSE_ENERGY_SCALE;
 }
