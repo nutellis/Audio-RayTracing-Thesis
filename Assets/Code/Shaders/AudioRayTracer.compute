@@ -572,7 +572,7 @@ void TraceRays(uint3 id : SV_DispatchThreadID)
     arrivalAngles.x = dot(firstDir, listenerRight.xyz); // Lateral
     arrivalAngles.y = dot(firstDir, float3(0, 1, 0));    // Elevation
     
-    for (int bounce = 0; bounce < 32; bounce++)
+    for (int bounce = 0; bounce < 256; bounce++)
     {
         float closestSourceDist = INF;
         int hitSourceIndex = -1;
