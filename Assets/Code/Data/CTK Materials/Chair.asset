@@ -20,7 +20,7 @@ MonoBehaviour:
   - 0.74
   - 0.83
   - 0.87
-  scattering: 0.4
+  scattering: 0.2
   transmissionCoefficients:
   - 0.2
   - 0.4

@@ -14,14 +14,14 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::AcousticMaterial
   materialID: 8
   absorptionCoefficients:
-  - 0.015
-  - 0.015
-  - 0.005
-  - 0.005
-  - 0.005
-  - 0.005
-  scattering: 0.02
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.01
+  - 0.02
+  - 0.02
+  scattering: 0.05
   transmissionCoefficients:
-  - 0
-  - 0
-  - 0
+  - 1
+  - 1
+  - 1

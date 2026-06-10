@@ -173,7 +173,7 @@ public class BVHManager : MonoBehaviour
         mortonCodesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
         primitiveIndicesBuffer = new ComputeBuffer(objectCount, sizeof(uint));
         
-        blasNodesBuffer = new ComputeBuffer(globalBlasNodes.Count,32, ComputeBufferType.Structured);
+        blasNodesBuffer = new ComputeBuffer(globalBlasNodes.Count, 48, ComputeBufferType.Structured);
         trianglesBuffer = new ComputeBuffer(globalTriangleSoup.Count, 48, ComputeBufferType.Structured);
 
         outMortonBuffer = new ComputeBuffer(objectCount, sizeof(uint));
@@ -316,21 +316,6 @@ public class BVHManager : MonoBehaviour
 
     public int debugDepth = 5;
     Instance[] instances;
-#if UNITY_EDITOR
-    void OnDrawGizmos()
-    {
-        if (!showDebug) return;
-        if (bvhNodeBuffer == null || objectCount == 0) return;
-    
-        GPUTlasNode[] nodes = new GPUTlasNode[objectCount * 2 - 1];
-        instances = new Instance[objectCount];
-        bvhNodeBuffer.GetData(nodes);
-        instances = ObjectRegistry<Instance>.Instance.GetValues();
-
-        // Recursive draw call
-        DrawNode(nodes, 0, 0); // Start at root (index 0)
-    }
-
     // Define a set of distinct colors for levels 0-10+
     private readonly Color[] levelColors = new Color[]
     {
@@ -344,7 +329,20 @@ public class BVHManager : MonoBehaviour
         new(0.5f, 0.5f, 1f), // Level 7
         Color.red // Level 8+ (Usually Leaves/Deepest)
     };
+#if UNITY_EDITOR
+    void OnDrawGizmos()
+    {
+        if (!showDebug) return;
+        if (bvhNodeBuffer == null || objectCount == 0) return;
+    
+        GPUTlasNode[] nodes = new GPUTlasNode[objectCount * 2 - 1];
+        bvhNodeBuffer.GetData(nodes);
+        
+        // Fetch your instances array globally
+        instances = ObjectRegistry<Instance>.Instance.GetValues();
 
+        DrawNode(nodes, 0, 0); 
+    }
 
     void DrawNode(GPUTlasNode[] nodes, int nodeIdx, int currentDepth)
     {
@@ -353,11 +351,8 @@ public class BVHManager : MonoBehaviour
 
         GPUTlasNode node = nodes[nodeIdx];
 
-        // 1. Pick color based on depth
-        // Uses modulo to cycle colors if the tree is deeper than the array
         Gizmos.color = levelColors[currentDepth % levelColors.Length];
 
-        // 2. Draw the box
         Vector3 center = (node.aabbMin + node.aabbMax) * 0.5f;
         Vector3 size = node.aabbMax - node.aabbMin;
 
@@ -366,7 +361,6 @@ public class BVHManager : MonoBehaviour
             Gizmos.DrawWireCube(center, size);
         }
 
-        // 3. Recurse if internal
         if (nodeIdx < (objectCount - 1))
         {
             DrawNode(nodes, node.leftChild, currentDepth + 1);
@@ -375,15 +369,23 @@ public class BVHManager : MonoBehaviour
 
         if (node.primitiveIndex != -1)
         {
-            int objectId = instances[node.primitiveIndex].objectId;
             Vector3 labelPos = center + Vector3.up * 0.05f;
-
-            string label = $"ID: {objectId}";
-
-            UnityEditor.Handles.Label(labelPos, label);
+            
+            // The fix: Safely check if the index exists in the instances array
+            if (instances != null && node.primitiveIndex < instances.Length)
+            {
+                int objectId = instances[node.primitiveIndex].objectId;
+                UnityEditor.Handles.Label(labelPos, $"ID: {objectId}");
+            }
+            else
+            {
+                // Fallback if instances registry is smaller than the objectCount
+                UnityEditor.Handles.Label(labelPos, $"Prim: {node.primitiveIndex}");
+            }
         }
     }
 #endif
+
 
     public ComputeBuffer GetBVHBuffer()
     {
@@ -497,6 +499,7 @@ public class BVHManager : MonoBehaviour
             
             rootNode.leftFirst = 0;
             rootNode.triCount = triangles.Length;
+            rootNode.parent = -1;
             
             blas[0] = rootNode;
             
@@ -694,13 +697,15 @@ public class BVHManager : MonoBehaviour
             GPUBlasNode leftChild = new()
             {
                 leftFirst = node.leftFirst,
-                triCount = leftCount
+                triCount = leftCount,
+                parent = nodeIdx
             };
 
             GPUBlasNode rightChild = new()
             {
                 leftFirst = i,
-                triCount = node.triCount - leftCount
+                triCount = node.triCount - leftCount,
+                parent = nodeIdx
             };
             
             node.leftFirst = leftChildIdx;

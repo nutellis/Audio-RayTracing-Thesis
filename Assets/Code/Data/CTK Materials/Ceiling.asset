@@ -22,6 +22,6 @@ MonoBehaviour:
   - 0.05
   scattering: 0.05
   transmissionCoefficients:
-  - 0.05
-  - 0.05
-  - 0.05
+  - 1
+  - 1
+  - 1

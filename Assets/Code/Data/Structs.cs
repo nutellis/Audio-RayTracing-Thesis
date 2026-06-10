@@ -15,7 +15,7 @@ namespace Code.Data
         public float energy3;
         public float energy4;
         public float energy5;
-
+        float2 padding;
     }
     
     [StructLayout(LayoutKind.Sequential)]
@@ -27,6 +27,8 @@ namespace Code.Data
         public float energy3;
         public float energy4;
         public float energy5;
+        
+        float2 padding;
     }
     
     public struct DirectAudioData 
@@ -83,6 +85,9 @@ namespace Code.Data
         public int leftFirst;
 
         public int triCount;
+
+        public int parent;
+        public float3 padding;
     }
     
     [StructLayout(LayoutKind.Sequential)]

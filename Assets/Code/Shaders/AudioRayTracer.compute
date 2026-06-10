@@ -78,8 +78,10 @@ struct BlasNode
     float3 aabbMax; 
     
     int leftFirst;  
-
     int triCount;   
+    
+    int parent;     // ADDED: Absolute index in the blasTrees buffer
+    float3 padding; // Adjusted for 16-byte alignment
 };
 
 struct Triangle
@@ -149,6 +151,8 @@ struct MacroBin
     uint energy3;
     uint energy4;
     uint energy5;
+    
+    float2 padding;
 };
 
 RWStructuredBuffer<MacroBin> echogramBuffer;
@@ -156,6 +160,7 @@ RWStructuredBuffer<MacroBin> echogramBuffer;
 struct FloatMacroBin {
     float energy0; float energy1; float energy2;
     float energy3; float energy4; float energy5;
+    float2 padding;
 };
 RWStructuredBuffer<FloatMacroBin> finalFloatEchogram;
 
@@ -269,10 +274,6 @@ float IntersectAABB(float3 rayOrigin, float3 invDir, float3 aabbMin, float3 aabb
 
 RayHit IntersectClosest(float3 origin, float3 direction, float maxDistance)
 {
-    int stack[16];
-    int stackCounter = 0;
-    
-    stack[stackCounter++] = 0;
     float3 invDir = 1.0 / direction;
     
     RayHit hit;
@@ -282,158 +283,234 @@ RayHit IntersectClosest(float3 origin, float3 direction, float maxDistance)
     hit.surfaceNormal = float3(1, 1, 1);
     hit.energyPerBand[0] = 0;
     
-    while (stackCounter > 0)
+    int currentNode = 0;
+    int previousNode = -1;
+    
+    while (currentNode != -1)
     {
-        uint nodeIdx = stack[--stackCounter];
-        TlasNode node = tlasTree[nodeIdx];
+        TlasNode node = tlasTree[currentNode];
         
-        float distance = IntersectAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
-        if (distance >= hit.distance) continue;
-        
-        if (node.primitiveIndex != -1)
+        // Arriving from parent
+        if (previousNode == node.parent)
         {
-            ObjInstance instance = objectInstances[node.primitiveIndex];
-            
-            // move the ray into the blas local space
-            float3 localOrigin = mul(instance.worldToLocal, float4(origin, 1.0)).xyz;
-            float3 localDirection = mul(instance.worldToLocal, float4(direction, 0.0)).xyz;
-            float worldToLocalScale = length(localDirection);
-            localDirection /= worldToLocalScale;
-            float3 invLocalDirection = 1.0 / localDirection;
-            
-            int blasStack[16];
-            int blasStackCounter = 0;
-    
-            blasStack[blasStackCounter++] = instance.blasOffset;
-            while (blasStackCounter > 0)
+            float distance = IntersectAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
+            if (distance >= hit.distance)
             {
-                uint blasNodeIdx = blasStack[--blasStackCounter];
-                BlasNode blasNode = blasTrees[blasNodeIdx];
-        
-                float localMaxDistance = hit.distance * worldToLocalScale;
-                float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
-                
-                if (blasDistance >= INF || blasDistance / worldToLocalScale >= hit.distance) continue;
-                
-                if (blasNode.triCount > 0)
-                {
-                    for (int i = 0; i < blasNode.triCount; i++)
-                    {
-                        Triangle tri = triangleSoup[instance.trianglesOffset + blasNode.leftFirst + i];
-                        float dist = IntersectTriangle(localOrigin, localDirection, tri);
-                        if (dist >= INF) continue;
-                        
-                        float worldDist = dist / worldToLocalScale;
-                        if (worldDist < hit.distance)
-                        {
-                            float3 edge1 = tri.vertexB - tri.vertexA;
-                            float3 edge2 = tri.vertexC - tri.vertexA;
-                            float3 localNormal = normalize(cross(edge1, edge2));
-                            
-                            float3 worldNormal = normalize(mul(localNormal, (float3x3)instance.worldToLocal));
-                            if (dot(worldNormal, direction) > 0) 
-                            {
-                                worldNormal = -worldNormal;
-                            }
-                            hit.surfaceNormal = worldNormal;
-                            hit.distance = worldDist;
-                            hit.objectId = instance.objectId;
-                            hit.materialId = instance.materialId;
-                        }
-                    }
-                }
-                else
-                {
-                    blasStack[blasStackCounter++] = instance.blasOffset + blasNode.leftFirst;
-                    blasStack[blasStackCounter++] = instance.blasOffset + blasNode.leftFirst + 1;
-                }
-            }
-        }
-        else
-        {
-            // we hit an internal node, so we need to push its children to the stack
-            stack[stackCounter++] = node.leftChild;
-            stack[stackCounter++] = node.rightChild;
-        }
-    }
-    return hit;
-}
-
-bool IntersectAny(float3 origin, float3 direction, float maxDistance, int2 ignoreObjectsId)
-{
-    int stack[16];
-    int stackCounter = 0;
-    
-    stack[stackCounter++] = 0;
-    float3 invDir = 1.0 / direction; // to save us from division by zero
-    
-    while (stackCounter > 0)
-    {
-        uint nodeIdx = stack[--stackCounter];
-        TlasNode node = tlasTree[nodeIdx];
-        
-        float distance = IntersectAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
-        
-        if (distance >= maxDistance) continue;
-        
-        if ( node.primitiveIndex != -1)
-        {
-            ObjInstance instance = objectInstances[node.primitiveIndex];
-            if (instance.objectId == ignoreObjectsId.x || instance.objectId == ignoreObjectsId.y)
-            {
+                previousNode = currentNode;
+                currentNode = node.parent;
                 continue;
             }
             
-            // move the ray into the blas local space
-            float3 localOrigin = mul(instance.worldToLocal, float4(origin, 1.0)).xyz;
-            float3 localDirection = mul(instance.worldToLocal, float4(direction, 0.0)).xyz;
-            float worldToLocalScale = length(localDirection);
-            localDirection /= worldToLocalScale;
-            float3 invLocalDirection = 1.0 / localDirection;
-            
-            int blasStack[16];
-            int blasStackCounter = 0;
-    
-            blasStack[blasStackCounter++] = instance.blasOffset;
-            while (blasStackCounter > 0)
+            if (node.primitiveIndex != -1)
             {
-                uint blasNodeIdx = blasStack[--blasStackCounter];
-                BlasNode blasNode = blasTrees[blasNodeIdx];
-        
-                float localMaxDistance = maxDistance * worldToLocalScale;
-                float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
+                ObjInstance instance = objectInstances[node.primitiveIndex];
                 
-                if (blasDistance >= localMaxDistance) continue;
+                float3 localOrigin = mul(instance.worldToLocal, float4(origin, 1.0)).xyz;
+                float3 localDirection = mul(instance.worldToLocal, float4(direction, 0.0)).xyz;
+                float worldToLocalScale = length(localDirection);
+                localDirection /= worldToLocalScale;
+                float3 invLocalDirection = 1.0 / localDirection;
                 
-                if (blasNode.triCount > 0)
+                int currentBlas = 0; // Local index
+                int previousBlas = -1; 
+                
+                while (currentBlas != -1)
                 {
-                    for (int i = 0; i < blasNode.triCount; i++)
+                    BlasNode blasNode = blasTrees[instance.blasOffset + currentBlas];
+                    
+                    if (previousBlas == blasNode.parent)
                     {
-                        Triangle tri = triangleSoup[instance.trianglesOffset + blasNode.leftFirst + i];
-                        float dist = IntersectTriangle(localOrigin, localDirection, tri);
-                        if (dist < maxDistance)
+                        float localMaxDistance = hit.distance * worldToLocalScale;
+                        float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
+                        
+                        if (blasDistance >= INF || (blasDistance / worldToLocalScale) >= hit.distance)
                         {
-                            return true;
+                            previousBlas = currentBlas;
+                            currentBlas = blasNode.parent;
+                            continue;
+                        }
+                        
+                        if (blasNode.triCount > 0)
+                        {
+                            for (int i = 0; i < blasNode.triCount; i++)
+                            {
+                                Triangle tri = triangleSoup[instance.trianglesOffset + blasNode.leftFirst + i];
+                                float dist = IntersectTriangle(localOrigin, localDirection, tri);
+                                if (dist >= INF) continue;
+                                
+                                float worldDist = dist / worldToLocalScale;
+                                if (worldDist < hit.distance)
+                                {
+                                    float3 edge1 = tri.vertexB - tri.vertexA;
+                                    float3 edge2 = tri.vertexC - tri.vertexA;
+                                    float3 localNormal = normalize(cross(edge1, edge2));
+                                    
+                                    float3 worldNormal = normalize(mul(localNormal, (float3x3)instance.worldToLocal));
+                                    if (dot(worldNormal, direction) > 0) 
+                                    {
+                                        worldNormal = -worldNormal;
+                                    }
+                                    hit.surfaceNormal = worldNormal;
+                                    hit.distance = worldDist;
+                                    hit.objectId = instance.objectId;
+                                    hit.materialId = instance.materialId;
+                                }
+                            }
+                            previousBlas = currentBlas;
+                            currentBlas = blasNode.parent;
+                        }
+                        else
+                        {
+                            previousBlas = currentBlas;
+                            currentBlas = blasNode.leftFirst; 
                         }
                     }
+                    else if (previousBlas == blasNode.leftFirst)
+                    {
+                        previousBlas = currentBlas;
+                        currentBlas = blasNode.leftFirst + 1; 
+                    }
+                    else
+                    {
+                        previousBlas = currentBlas;
+                        currentBlas = blasNode.parent; 
+                    }
                 }
-                else
-                {
-                    blasStack[blasStackCounter++] = instance.blasOffset + blasNode.leftFirst;
-                    blasStack[blasStackCounter++] = instance.blasOffset + blasNode.leftFirst + 1;
-                }
+                
+                previousNode = currentNode;
+                currentNode = node.parent;
             }
+            else
+            {
+                previousNode = currentNode;
+                currentNode = node.leftChild;
+            }
+        }
+        else if (previousNode == node.leftChild)
+        {
+            previousNode = currentNode;
+            currentNode = node.rightChild;
         }
         else
         {
-            // we hit an internal node, so we need to push its children to the stack
-            stack[stackCounter++] = node.leftChild;
-            stack[stackCounter++] = node.rightChild;
+            previousNode = currentNode;
+            currentNode = node.parent;
+        }
+    }
+    
+    return hit;
+}
+bool IntersectAny(float3 origin, float3 direction, float maxDistance, int2 ignoreObjectsId)
+{
+    float3 invDir = 1.0 / direction; 
+    
+    int currentNode = 0;
+    int previousNode = -1;
+    
+    while (currentNode != -1)
+    {
+        TlasNode node = tlasTree[currentNode];
+        
+        if (previousNode == node.parent)
+        {
+            float distance = IntersectAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
+            
+            if (distance >= maxDistance) 
+            {
+                previousNode = currentNode;
+                currentNode = node.parent;
+                continue;
+            }
+            
+            if (node.primitiveIndex != -1)
+            {
+                ObjInstance instance = objectInstances[node.primitiveIndex];
+                if (instance.objectId == ignoreObjectsId.x || instance.objectId == ignoreObjectsId.y)
+                {
+                    previousNode = currentNode;
+                    currentNode = node.parent;
+                    continue;
+                }
+                
+                float3 localOrigin = mul(instance.worldToLocal, float4(origin, 1.0)).xyz;
+                float3 localDirection = mul(instance.worldToLocal, float4(direction, 0.0)).xyz;
+                float worldToLocalScale = length(localDirection);
+                localDirection /= worldToLocalScale;
+                float3 invLocalDirection = 1.0 / localDirection;
+                
+                int currentBlas = 0;
+                int previousBlas = -1;
+        
+                while (currentBlas != -1)
+                {
+                    BlasNode blasNode = blasTrees[instance.blasOffset + currentBlas];
+                    
+                    if (previousBlas == blasNode.parent)
+                    {
+                        float localMaxDistance = maxDistance * worldToLocalScale;
+                        float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
+                        
+                        if (blasDistance >= localMaxDistance)
+                        {
+                            previousBlas = currentBlas;
+                            currentBlas = blasNode.parent;
+                            continue;
+                        }
+                        
+                        if (blasNode.triCount > 0)
+                        {
+                            for (int i = 0; i < blasNode.triCount; i++)
+                            {
+                                Triangle tri = triangleSoup[instance.trianglesOffset + blasNode.leftFirst + i];
+                                float dist = IntersectTriangle(localOrigin, localDirection, tri);
+                                if (dist < maxDistance)
+                                {
+                                    return true;
+                                }
+                            }
+                            previousBlas = currentBlas;
+                            currentBlas = blasNode.parent;
+                        }
+                        else
+                        {
+                            previousBlas = currentBlas;
+                            currentBlas = blasNode.leftFirst;
+                        }
+                    }
+                    else if (previousBlas == blasNode.leftFirst)
+                    {
+                        previousBlas = currentBlas;
+                        currentBlas = blasNode.leftFirst + 1;
+                    }
+                    else
+                    {
+                        previousBlas = currentBlas;
+                        currentBlas = blasNode.parent;
+                    }
+                }
+                
+                previousNode = currentNode;
+                currentNode = node.parent;
+            }
+            else
+            {
+                previousNode = currentNode;
+                currentNode = node.leftChild;
+            }
+        }
+        else if (previousNode == node.leftChild)
+        {
+            previousNode = currentNode;
+            currentNode = node.rightChild;
+        }
+        else
+        {
+            previousNode = currentNode;
+            currentNode = node.parent;
         }
     }
     return false;
 }
-
 float IntersectSphere(float3 rayOrigin, float3 rayDir, float3 sphereCenter, float radius)
 {
     float3 oc = rayOrigin - sphereCenter;
@@ -446,119 +523,138 @@ float IntersectSphere(float3 rayOrigin, float3 rayDir, float3 sphereCenter, floa
 
 void Transmit(float3 origin, float3 direction, float maxDistance, int sourceId, inout float3 survived)
 {
-    int stack[16];
-    int stackCounter = 0;
-    
-    stack[stackCounter++] = 0;
     float3 invDir = 1.0 / direction;
     
-    while (stackCounter > 0)
-    {
-        uint nodeIdx = stack[--stackCounter];
-        TlasNode node = tlasTree[nodeIdx];
-        
-        float distance = IntersectAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
-        
-        if (distance >= maxDistance) continue;
-        
-        if ( node.primitiveIndex != -1)
-        {
-            ObjInstance instance = objectInstances[node.primitiveIndex];
-            if (instance.objectId == sourceId)  continue;
-
-            // move the ray into the blas local space
-            float3 localOrigin = mul(instance.worldToLocal, float4(origin, 1.0)).xyz;
-            float3 localDirection = mul(instance.worldToLocal, float4(direction, 0.0)).xyz;
-            
-            float worldToLocalScale = length(localDirection);
-            localDirection /= worldToLocalScale;
-            float3 invLocalDirection = 1.0 / localDirection;
-            
-            int blasStack[16];
-            int blasStackCounter = 0;
+    int currentNode = 0;
+    int previousNode = -1;
     
-            blasStack[blasStackCounter++] = instance.blasOffset;
-            while (blasStackCounter > 0)
-            {
-                uint blasNodeIdx = blasStack[--blasStackCounter];
-                BlasNode blasNode = blasTrees[blasNodeIdx];
+    while (currentNode != -1)
+    {
+        TlasNode node = tlasTree[currentNode];
         
-                float localMaxDistance = maxDistance * worldToLocalScale;
-                float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
-                
-                if (blasDistance >= localMaxDistance) continue;
-                
-                if (blasNode.triCount > 0)
+        if (previousNode == node.parent)
+        {
+            float distance = IntersectAABB(origin, invDir, node.aabbMin, node.aabbMax, 0.001, maxDistance);
+            
+            if (distance >= maxDistance)
+            {
+                previousNode = currentNode;
+                currentNode = node.parent;
+                continue;
+            }
+            
+            if (node.primitiveIndex != -1)
+            {
+                ObjInstance instance = objectInstances[node.primitiveIndex];
+                if (instance.objectId == sourceId)  
                 {
-                    for (int i = 0; i < blasNode.triCount; i++)
+                    previousNode = currentNode;
+                    currentNode = node.parent;
+                    continue;
+                }
+
+                float3 localOrigin = mul(instance.worldToLocal, float4(origin, 1.0)).xyz;
+                float3 localDirection = mul(instance.worldToLocal, float4(direction, 0.0)).xyz;
+                
+                float worldToLocalScale = length(localDirection);
+                localDirection /= worldToLocalScale;
+                float3 invLocalDirection = 1.0 / localDirection;
+                
+                int currentBlas = 0;
+                int previousBlas = -1;
+        
+                while (currentBlas != -1)
+                {
+                    BlasNode blasNode = blasTrees[instance.blasOffset + currentBlas];
+            
+                    if (previousBlas == blasNode.parent)
                     {
-                        Triangle tri = triangleSoup[instance.trianglesOffset + blasNode.leftFirst + i];
-                        float dist = IntersectTriangle(localOrigin, localDirection, tri);
-                        float worldDist = dist / worldToLocalScale;
+                        float localMaxDistance = maxDistance * worldToLocalScale;
+                        float blasDistance = IntersectAABB(localOrigin, invLocalDirection, blasNode.aabbMin, blasNode.aabbMax, 0.001, localMaxDistance);
                         
-                        // if (worldDist > 0.001 && worldDist < maxDistance)
-                        // {
-                        //     MaterialData mat = materials[instance.materialId];
-                        //     float maxSurv = 0.0;
-                        //     
-                        //         survived.x *= mat.transmission.x;
-                        //         survived.y *= mat.transmission.y;
-                        //         survived.z *= mat.transmission.z;
-                        //
-                        //     maxSurv = max(maxSurv, max(survived[0], max(survived[1], survived[2])));
-                        //     
-                        //     if (maxSurv < 0.01) return; 
-                        // } 
-                        if (worldDist > 0.005f && worldDist < maxDistance) {
-                            MaterialData mat = materials[instance.materialId];
-                            
-                            float survivalProb = (mat.transmission.x + mat.transmission.y + mat.transmission.z) / 3.0f;
-                            
-                            uint seed = PcgHash(asuint(origin.x) ^ asuint(direction.y) ^ i ^ frameCount);
-                            if (Random(seed) > survivalProb) {
-                                survived = float3(0, 0, 0);
-                                return; // ray is blocked. bye
+                        if (blasDistance >= localMaxDistance)
+                        {
+                            previousBlas = currentBlas;
+                            currentBlas = blasNode.parent;
+                            continue;
+                        }
+                        
+                        if (blasNode.triCount > 0)
+                        {
+                            for (int i = 0; i < blasNode.triCount; i++)
+                            {
+                                Triangle tri = triangleSoup[instance.trianglesOffset + blasNode.leftFirst + i];
+                                float dist = IntersectTriangle(localOrigin, localDirection, tri);
+                                float worldDist = dist / worldToLocalScale;
+                                
+                                if (worldDist > 0.005f && worldDist < maxDistance) 
+                                {
+                                    MaterialData mat = materials[instance.materialId];
+                                    
+                                    float survivalProb = (mat.transmission.x + mat.transmission.y + mat.transmission.z) / 3.0f;
+                                    
+                                    uint seed = PcgHash(asuint(origin.x) ^ asuint(direction.y) ^ i ^ frameCount);
+                                    if (Random(seed) > survivalProb) 
+                                    {
+                                        survived = float3(0, 0, 0);
+                                        return; 
+                                    }
+                                    
+                                    survived.x *= (mat.transmission.x / survivalProb);
+                                    survived.y *= (mat.transmission.y / survivalProb);
+                                    survived.z *= (mat.transmission.z / survivalProb);
+                                }
                             }
-                            
-                            survived.x *= (mat.transmission.x / survivalProb);
-                            survived.y *= (mat.transmission.y / survivalProb);
-                            survived.z *= (mat.transmission.z / survivalProb);
+                            previousBlas = currentBlas;
+                            currentBlas = blasNode.parent;
+                        }
+                        else
+                        {
+                            previousBlas = currentBlas;
+                            currentBlas = blasNode.leftFirst;
                         }
                     }
+                    else if (previousBlas == blasNode.leftFirst)
+                    {
+                        previousBlas = currentBlas;
+                        currentBlas = blasNode.leftFirst + 1;
+                    }
+                    else
+                    {
+                        previousBlas = currentBlas;
+                        currentBlas = blasNode.parent;
+                    }
                 }
-                else
-                {
-                    blasStack[blasStackCounter++] = instance.blasOffset + blasNode.leftFirst;
-                    blasStack[blasStackCounter++] = instance.blasOffset + blasNode.leftFirst + 1;
-                }
+                
+                previousNode = currentNode;
+                currentNode = node.parent;
             }
+            else
+            {
+                previousNode = currentNode;
+                currentNode = node.leftChild;
+            }
+        }
+        else if (previousNode == node.leftChild)
+        {
+            previousNode = currentNode;
+            currentNode = node.rightChild;
         }
         else
         {
-            // we hit an internal node, so we need to push its children to the stack
-            stack[stackCounter++] = node.leftChild;
-            stack[stackCounter++] = node.rightChild;
+            previousNode = currentNode;
+            currentNode = node.parent;
         }
     }
 }
 
 
-
 [numthreads(64,1,1)]
 void TraceRays(uint3 id : SV_DispatchThreadID)
 {
-    // if (id.x >= (uint) initialRays)
-    // {
-    //     return;
-    // }
     uint globalRayIndex = id.x + rayOffset;
     if (globalRayIndex >= (uint)initialRays) return;
     
-    // float3 currentPos = listenerPosition.xyz;
-    // float3 currentDir = SphericalDistribution(id.x);
-    // float3 firstDir = currentDir;
-    // float totalDistance = 0;
-
     Ray r = rayBuffer[globalRayIndex];
 
     float3 currentPos = r.origin;
@@ -746,6 +842,7 @@ void ConvertToFloat(uint3 id : SV_DispatchThreadID) {
     finalFloatEchogram[id.x].energy3 = (float)echogramBuffer[id.x].energy3 * INVERSE_ENERGY_SCALE;
     finalFloatEchogram[id.x].energy4 = (float)echogramBuffer[id.x].energy4 * INVERSE_ENERGY_SCALE;
     finalFloatEchogram[id.x].energy5 = (float)echogramBuffer[id.x].energy5 * INVERSE_ENERGY_SCALE;
+    finalFloatEchogram[id.x].padding = float2(0.0f, 0.0f);
 
     echogramBuffer[id.x].energy0 = 0;
     echogramBuffer[id.x].energy1 = 0;
@@ -753,4 +850,5 @@ void ConvertToFloat(uint3 id : SV_DispatchThreadID) {
     echogramBuffer[id.x].energy3 = 0;
     echogramBuffer[id.x].energy4 = 0;
     echogramBuffer[id.x].energy5 = 0;
+    echogramBuffer[id.x].padding = float2(0.0f, 0.0f);
 }

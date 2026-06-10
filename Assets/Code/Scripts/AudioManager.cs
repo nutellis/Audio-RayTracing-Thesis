@@ -65,6 +65,7 @@ public class AudioManager : MonoBehaviour
    
     void Start()
     {
+        Application.targetFrameRate = 120;
         listener = FindFirstObjectByType<ListenerController>();
         listenerCollider = listener.GetComponent<CapsuleCollider>();
         
@@ -77,7 +78,7 @@ public class AudioManager : MonoBehaviour
         traceDirectKernel = audioShader.FindKernel("TraceDirectSound");
         convertToFloatKernel = audioShader.FindKernel("ConvertToFloat");
 
-        echogramBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured | GraphicsBuffer.Target.CopySource, totalEchogramSize, 24); 
+        echogramBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured | GraphicsBuffer.Target.CopySource, totalEchogramSize, 32); 
         audioShader.SetBuffer(traceKernel, "echogramBuffer", echogramBuffer);
 
         sourcesBuffer = new ComputeBuffer(MAX_SOURCES, Marshal.SizeOf(typeof(SourceData)));
@@ -93,7 +94,7 @@ public class AudioManager : MonoBehaviour
         directAudioBuffer = new ComputeBuffer(MAX_SOURCES, Marshal.SizeOf(typeof(DirectAudioData)));
         audioShader.SetBuffer(traceDirectKernel, "directAudioOutput", directAudioBuffer);
         
-        finalFloatBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, totalEchogramSize, 24); 
+        finalFloatBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, totalEchogramSize, 32); 
         audioShader.SetBuffer(convertToFloatKernel, "echogramBuffer", echogramBuffer);
         audioShader.SetBuffer(convertToFloatKernel, "finalFloatEchogram", finalFloatBuffer);
 
